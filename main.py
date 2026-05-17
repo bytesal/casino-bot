@@ -89,17 +89,24 @@ class BlackjackBot(commands.Bot):
         super().__init__(command_prefix="!", intents=bot_intents)
 
     async def setup_hook(self):
-        try:
-            synced = await self.tree.sync()
-            print(f"Synced {len(synced)} command(s) successfully via setup_hook.")
-        except Exception as e:
-            print(f"Failed to sync commands in setup_hook: {e}")
+        # تم إزالة المزامنة التلقائية المزعجة لمنع تعليق البوت
+        print("Setup hook executed smoothly without hardcoded IDs.")
 
 client = BlackjackBot()
 
 @client.event
 async def on_ready():
-    print(f"Logged in as {client.user.name} and ready to go!")
+    print(f"Logged in as {client.user.name} and ready for action!")
+
+@client.tree.command(name="sync", description="Secret command to sync application commands globally")
+async def sync(interaction: discord.Interaction):
+    # يتحقق البوت إذا كنت أنت مالك التطبيق الفعلي لكي لا يعبث أحد بالأمر
+    await interaction.response.defer(ephemeral=True)
+    try:
+        await client.tree.sync()
+        await interaction.followup.send("All commands synced globally successfully! It might take some time to update everywhere.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"Failed to sync: {e}", ephemeral=True)
 
 @client.tree.command(name="blackjack", description="Start a game of Blackjack")
 async def blackjack(interaction: discord.Interaction):
