@@ -89,14 +89,18 @@ class BlackjackBot(commands.Bot):
         super().__init__(command_prefix="!", intents=bot_intents)
 
     async def setup_hook(self):
-        self.loop.create_task(self.tree.sync())
-        print("Slash commands sync started in background.")
+        print("Setup hook executed.")
 
 client = BlackjackBot()
 
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user.name}")
+    try:
+        synced = await client.tree.sync()
+        print(f"Synced {len(synced)} command(s) successfully globally!")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
 
 @client.tree.command(name="blackjack", description="Start a game of Blackjack")
 async def blackjack(interaction: discord.Interaction):
