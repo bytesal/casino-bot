@@ -286,6 +286,25 @@ async def work(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
+@client.tree.command(name="give_money", description="Developer Admin Command: Grant virtual money to a specific user")
+@app_commands.describe(user="The user you want to grant money to", amount="The amount of money to add (can be negative to deduct)")
+async def give_money(interaction: discord.Interaction, user: discord.User, amount: int):
+    if interaction.user.id != interaction.client.application.owner.id and interaction.user.id != 339082987114627072: 
+        await interaction.response.send_message("❌ Unauthorized Access! This command is strictly reserved for the Bot Owner.", ephemeral=True)
+        return
+
+    update_balance(user.id, amount)
+    new_bal = get_balance(user.id)
+    
+    embed = discord.Embed(title="⚙️ Admin Economy Intervention", color=discord.Color.purple())
+    embed.add_field(name="Target User", value=f"{user.mention}", inline=True)
+    embed.add_field(name="Adjustment", value=f"**${amount}**", inline=True)
+    embed.add_field(name="New Total Balance", value=f"**${new_bal}**", inline=False)
+    embed.set_footer(text="Action authorized by Bot Developer")
+    
+    await interaction.response.send_message(embed=embed)
+
+
 @client.tree.command(name="blackjack", description="Start a high-stakes game of Blackjack")
 @app_commands.describe(bet="The amount of virtual money you want to bet")
 async def blackjack(interaction: discord.Interaction, bet: int):
