@@ -89,18 +89,17 @@ class BlackjackBot(commands.Bot):
         super().__init__(command_prefix="!", intents=bot_intents)
 
     async def setup_hook(self):
-        print("Setup hook executed.")
+        try:
+            synced = await self.tree.sync()
+            print(f"Synced {len(synced)} command(s) successfully via setup_hook.")
+        except Exception as e:
+            print(f"Failed to sync commands in setup_hook: {e}")
 
 client = BlackjackBot()
 
 @client.event
 async def on_ready():
-    print(f"Logged in as {client.user.name}")
-    try:
-        synced = await client.tree.sync()
-        print(f"Synced {len(synced)} command(s) successfully globally!")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
+    print(f"Logged in as {client.user.name} and ready to go!")
 
 @client.tree.command(name="blackjack", description="Start a game of Blackjack")
 async def blackjack(interaction: discord.Interaction):
@@ -122,6 +121,21 @@ async def blackjack(interaction: discord.Interaction):
     embed.add_field(name="Dealer Hand", value=f"{dealer_hand[0]}, [Hidden]")
 
     await interaction.followup.send(embed=embed, view=view)
+
+@client.tree.command(name="purge", description="Delete a specified number of messages from the channel")
+@app_commands.describe(amount="The number of messages to delete")
+async def purge(interaction: discord.Interaction, amount: int):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+
+    if amount < 1:
+        await interaction.response.send_message("Please provide a number greater than 0.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    deleted = await interaction.channel.purge(limit=amount)
+    await interaction.followup.send(f"Successfully deleted {len(deleted)} message(s).", ephemeral=True)
 
 class HealthCheckServer(BaseHTTPRequestHandler):
     def do_GET(self):
