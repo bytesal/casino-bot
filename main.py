@@ -211,6 +211,11 @@ client = BlackjackBot()
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user.name} and ready for action!")
+    try:
+        synced = await client.tree.sync()
+        print(f"Automatically synced {len(synced)} command(s) globally on startup!")
+    except Exception as e:
+        print(f"Failed to auto-sync commands: {e}")
 
 
 @client.tree.error
