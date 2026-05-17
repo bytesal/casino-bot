@@ -23,10 +23,16 @@ class BlackjackView(discord.ui.View):
             '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7,
             '8': 8, '9': 9, '10': 10, 'J': 10, 'Q': 10, 'K': 10, 'A': 11
         }
+        ranks = list(card_values.keys())
+
         for card in hand:
-            score += card_values[card[:-1]]
-            if card[:-1] == 'A':
-                aces += 1
+            for rank in sorted(ranks, key=len, reverse=True):  # check '10' before '1'
+                if card.startswith(rank):
+                    score += card_values[rank]
+                    if rank == 'A':
+                        aces += 1
+                    break
+
         while score > 21 and aces:
             score -= 10
             aces -= 1
@@ -41,7 +47,6 @@ class BlackjackView(discord.ui.View):
             return False
         return True
 
-    # Called when the view times out so the buttons don't stay active forever
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
@@ -64,7 +69,6 @@ class BlackjackView(discord.ui.View):
                 embed.add_field(name="Dealer Hand", value=f"{self.dealer_hand[0]}, [Hidden]", inline=False)
                 await interaction.response.edit_message(embed=embed, view=self)
         except Exception as e:
-            # Prevent the interaction from freezing if something goes wrong
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"An error occurred: {e}", ephemeral=True)
             print(f"[Hit Error] {e}")
@@ -108,12 +112,9 @@ class BlackjackBot(commands.Bot):
         super().__init__(command_prefix="!", intents=bot_intents)
 
     async def setup_hook(self):
-        # Do NOT call tree.sync() here — it causes the bot to hang on startup
-        # Use the /sync slash command manually when you need to push new commands
         print("Setup hook executed. Use /sync to register commands.")
 
     async def on_error(self, event_method, *args, **kwargs):
-        # Global error handler so uncaught exceptions don't silently kill interactions
         import traceback
         print(f"[Bot Error in {event_method}]")
         traceback.print_exc()
@@ -129,7 +130,6 @@ async def on_ready():
 
 @client.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    # Catches slash command errors globally so interactions never freeze
     msg = f"Something went wrong: {error}"
     try:
         if interaction.response.is_done():
@@ -156,7 +156,6 @@ async def sync(interaction: discord.Interaction):
 
 @client.tree.command(name="blackjack", description="Start a game of Blackjack")
 async def blackjack(interaction: discord.Interaction):
-    # Defer FIRST — gives us 15 minutes to reply and prevents "thinking" freeze
     await interaction.response.defer(ephemeral=False)
 
     try:
@@ -177,7 +176,6 @@ async def blackjack(interaction: discord.Interaction):
 
         await interaction.followup.send(embed=embed, view=view)
     except Exception as e:
-        # followup works here because we already deferred above
         await interaction.followup.send(f"Failed to start game: {e}", ephemeral=True)
         print(f"[Blackjack Start Error] {e}")
 
@@ -209,7 +207,6 @@ class HealthCheckServer(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"Bot is running alive!")
 
-    # Silence the default request logging to keep the console clean
     def log_message(self, format, *args):
         pass
 
@@ -226,7 +223,6 @@ async def main():
         print("Error: DISCORD_TOKEN variable is missing.")
         return
 
-    # Start health server BEFORE the bot so it's up when the host checks
     threading.Thread(target=run_health_server, daemon=True).start()
     print("Health check server started.")
 
