@@ -3,6 +3,9 @@ from discord import app_commands
 from discord.ext import commands
 import random
 import os
+import asyncio
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
 
 class BlackjackView(discord.ui.View):
     def __init__(self, player_id, deck, player_hand, dealer_hand):
@@ -80,11 +83,14 @@ class BlackjackView(discord.ui.View):
 
 class BlackjackBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix="!", intents=discord.Intents.default())
+        bot_intents = discord.Intents.default()
+        bot_intents.message_content = True
+        bot_intents.members = True
+        super().__init__(command_prefix="!", intents=bot_intents)
 
     async def setup_hook(self):
-        await self.tree.sync()
-        print("Slash commands synced successfully.")
+        self.loop.create_task(self.tree.sync())
+        print("Slash commands sync started in background.")
 
 client = BlackjackBot()
 
@@ -94,6 +100,8 @@ async def on_ready():
 
 @client.tree.command(name="blackjack", description="Start a game of Blackjack")
 async def blackjack(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=False)
+
     suits = ['♠️', '♥️', '♦️', '♣️']
     ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
     deck = [f"{rank}{suit}" for rank in ranks for suit in suits]
@@ -102,14 +110,34 @@ async def blackjack(interaction: discord.Interaction):
     player_hand = [deck.pop(), deck.pop()]
     dealer_hand = [deck.pop(), deck.pop()]
 
-    player_score = BlackjackView.calculate_score(None, player_hand)
+    view = BlackjackView(interaction.user.id, deck, player_hand, dealer_hand)
+    player_score = view.calculate_score(player_hand)
 
     embed = discord.Embed(title="Blackjack Game", color=discord.Color.blue())
     embed.add_field(name="Your Hand", value=f"{player_hand[0]}, {player_hand[1]} (Score: {player_score})")
     embed.add_field(name="Dealer Hand", value=f"{dealer_hand[0]}, [Hidden]")
 
-    view = BlackjackView(interaction.user.id, deck, player_hand, dealer_hand)
-    await interaction.response.send_message(embed=embed, view=view)
+    await interaction.followup.send(embed=embed, view=view)
 
-TOKEN = os.getenv('DISCORD_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-client.run(TOKEN)
+class HealthCheckServer(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"Bot is running alive!")
+
+def run_health_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckServer)
+    server.serve_forever()
+
+async def main():
+    TOKEN = os.getenv('DISCORD_TOKEN')
+    if TOKEN:
+        threading.Thread(target=run_health_server, daemon=True).start()
+        await client.start(TOKEN)
+    else:
+        print("Error: DISCORD_TOKEN variable is missing.")
+
+if __name__ == "__main__":
+    asyncio.run(main())
