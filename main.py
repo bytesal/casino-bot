@@ -111,7 +111,7 @@ def get_slot_payout(reels, bet):
     if combo in SLOT_PAYOUTS:
         return SLOT_PAYOUTS[combo] * bet, f"**Triple {combo[0]}** 🎊"
     if reels.count("🍒") == 2:
-        return bet, "Double Cherry 🍒🍒"
+        return bet * 2, "Double Cherry 🍒🍒"
     return 0, "No Combination 😔"
 
 # ===================== INTERACTIVE SHOP COMPONENTS =====================
@@ -414,6 +414,10 @@ class SlotsReplayView(discord.ui.View):
             return
             
         await interaction.response.defer()
+        
+        # Deduct wager upfront for logical economic accounting balance tracking
+        update_balance(self.player_id, -self.bet)
+        
         reels = spin_slots()
         payout, combo_name = get_slot_payout(reels, self.bet)
         reels_display = " | ".join(reels)
@@ -425,7 +429,6 @@ class SlotsReplayView(discord.ui.View):
             embed = discord.Embed(title="🎰 Slot Jackpot Triggered!", color=discord.Color.green())
             embed.add_field(name="Payout Prize", value=f"**+${payout:,}**", inline=True)
         else:
-            update_balance(self.player_id, -self.bet)
             increment_stats(self.player_id, "losses")
             new_bal = get_balance(self.player_id)
             embed = discord.Embed(title="🎰 Slot Matrix Settled", color=discord.Color.red())
@@ -992,6 +995,10 @@ async def slots_cmd(interaction: discord.Interaction, bet: int):
         return
         
     await interaction.response.defer()
+    
+    # Deduct wager upfront for logical economic accounting balance tracking
+    update_balance(user_id, -bet)
+    
     reels = spin_slots()
     payout, combo_name = get_slot_payout(reels, bet)
     reels_display = " | ".join(reels)
@@ -1003,7 +1010,6 @@ async def slots_cmd(interaction: discord.Interaction, bet: int):
         embed = discord.Embed(title="🎰 Slot Jackpot Triggered!", color=discord.Color.green())
         embed.add_field(name="Payout Prize", value=f"**+${payout:,}**", inline=True)
     else:
-        update_balance(user_id, -bet)
         increment_stats(user_id, "losses")
         new_bal = get_balance(user_id)
         embed = discord.Embed(title="🎰 Slot Matrix Settled", color=discord.Color.red())
