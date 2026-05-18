@@ -59,13 +59,83 @@ def increment_stats(user_id, stat_type):
 
 # ===================== CASINO SHOP CONFIGURATION =====================
 SHOP_ITEMS = {
-    1: {"name": "Gambler 🎲", "price": 5000, "color": discord.Color.blue()},
-    2: {"name": "High Roller 💰", "price": 25000, "color": discord.Color.green()},
-    3: {"name": "Casino VIP ✨", "price": 100000, "color": discord.Color.gold()},
-    4: {"name": "Card Shark 🦈", "price": 250000, "color": discord.Color.teal()},
-    5: {"name": "Millionaire 👑", "price": 1000000, "color": discord.Color.purple()},
-    6: {"name": "The Casino Boss 🏰", "price": 5000000, "color": discord.Color.dark_red()}
+    "item_1": {"name": "Gambler 🎲", "price": 5000, "color": discord.Color.blue(), "desc": "Starter casino tier."},
+    "item_2": {"name": "High Roller 💰", "price": 25000, "color": discord.Color.green(), "desc": "For big wagerers."},
+    "item_3": {"name": "Casino VIP ✨", "price": 100000, "color": discord.Color.gold(), "desc": "Exclusive lounge access."},
+    "item_4": {"name": "Card Shark 🦈", "price": 250000, "color": discord.Color.teal(), "desc": "Blackjack specialist."},
+    "item_5": {"name": "Millionaire 👑", "price": 1000000, "color": discord.Color.purple(), "desc": "Server elite milestone."},
+    "item_6": {"name": "The Casino Boss 🏰", "price": 5000000, "color": discord.Color.dark_red(), "desc": "Ultimate luxury badge."}
 }
+
+class ShopDropdown(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=info["name"], value=item_id, description=f"${info['price']:,} — {info['desc']}")
+            for item_id, info in SHOP_ITEMS.items()
+        ]
+        super().__init__(placeholder="Select a premium role to purchase... 🛍️", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        user = interaction.user
+        guild = interaction.guild
+        item_id = self.values[0]
+        item = SHOP_ITEMS[item_id]
+        
+        current_bal = get_balance(user.id)
+        if current_bal < item["price"]:
+            await interaction.followup.send(
+                f"❌ Transaction Denied! You need **${item['price']:,}** to buy **{item['name']}**, but your current balance is only **${current_bal}**.", 
+                ephemeral=True
+            )
+            return
+
+        role = discord.utils.get(guild.roles, name=item["name"])
+        if not role:
+            try:
+                role = await guild.create_role(
+                    name=item["name"], 
+                    color=item["color"], 
+                    reason="Automatic dynamic creation via Casino Interactive Shop"
+                )
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    "❌ Bot Configuration Error! The bot is missing `Manage Roles` authorization permission to create this role.", 
+                    ephemeral=True
+                )
+                return
+            except Exception as e:
+                await interaction.followup.send(f"❌ Structural error generating server role: {e}", ephemeral=True)
+                return
+
+        if role in user.roles:
+            await interaction.followup.send(f"⚠️ Account Note: You already own the premium **{item['name']}** role designation!", ephemeral=True)
+            return
+
+        try:
+            await user.add_roles(role)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ Hierarchy Permission Exception! This role is positioned higher than the bot's current maximum management group tier.", 
+                ephemeral=True
+            )
+            return
+
+        update_balance(user.id, -item["price"])
+        new_bal = get_balance(user.id)
+        
+        embed = discord.Embed(title="🛍️ Interactive Shop Purchase Successful!", color=discord.Color.green())
+        embed.description = f"Congratulations {user.mention}! You have successfully purchased and unlocked the **{item['name']}** role directly from the menu!"
+        embed.add_field(name="Amount Charged", value=f"-${item['price']:,}", inline=True)
+        embed.add_field(name="Remaining Funds Wallet", value=f"${new_bal:,}", inline=True)
+        embed.set_footer(text="Vanity badge profile upgrade complete ✨")
+        
+        await interaction.followup.send(embed=embed, ephemeral=False)
+
+class ShopDropdownView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(ShopDropdown())
 
 # ===================== BLACKJACK =====================
 class BlackjackView(discord.ui.View):
@@ -566,12 +636,10 @@ async def help_command(interaction: discord.Interaction):
         name="💰 Server Economy & Shop",
         value=(
             "`/balance` - Check your wallet data.\n"
-            "`/work` - Complete freelance software tasks every 5 minutes.\n"
             "`/daily` - Collect your 24-hour bonus salary reward.\n"
             "`/leaderboard` - Review the wealthiest system users.\n"
             "`/stats [user]` - Look up casino play analytics & performance metrics.\n"
-            "`/shop` - View exclusive luxury roles available for purchase.\n"
-            "`/buy [item_id]` - Purchase a premium server role directly.\n"
+            "`/shop` - Open the interactive premium luxury roles store menu.\n"
         ),
         inline=False
     )
@@ -595,25 +663,6 @@ async def balance(interaction: discord.Interaction):
     embed = discord.Embed(title="💰 Bank Account Statement", color=discord.Color.green())
     embed.add_field(name="Account Holder", value=interaction.user.mention, inline=True)
     embed.add_field(name="Net Balance", value=f"**${user_bal}**", inline=True)
-    await interaction.response.send_message(embed=embed)
-
-
-@client.tree.command(name="work", description="Complete high-priority freelance programming tasks to earn cash rewards")
-@app_commands.checks.cooldown(1, 300)
-async def work(interaction: discord.Interaction):
-    jobs = [
-        "You successfully patched a critical database leak and earned **${amount}**! 💻",
-        "You worked as an official dealer in the premium casino lounge and got **${amount}** in tips! 🃏",
-        "You optimized high-traffic backend endpoints for a contract client and earned **${amount}**! 🚀",
-        "You deployed a modern, responsive landing page framework and earned **${amount}**! 🎨",
-        "You resolved a complex upstream dependency issue on GitHub and received a bounty of **${amount}**! 🛡️"
-    ]
-    earned = random.randint(50, 150)
-    job_message = random.choice(jobs).replace("{amount}", str(earned))
-    update_balance(interaction.user.id, earned)
-    new_bal = get_balance(interaction.user.id)
-    embed = discord.Embed(title="💼 Freelance Contract Completed!", description=job_message, color=discord.Color.teal())
-    embed.set_footer(text=f"Updated Total Balance: ${new_bal}")
     await interaction.response.send_message(embed=embed)
 
 
@@ -707,99 +756,47 @@ async def stats_command(interaction: discord.Interaction, user: discord.User = N
     await interaction.response.send_message(embed=embed)
 
 
-@client.tree.command(name="shop", description="Open the premium casino shop to view exclusive collectible luxury roles")
+@client.tree.command(name="shop", description="Open the premium interactive casino shop to purchase luxury vanity roles")
 async def shop_command(interaction: discord.Interaction):
     embed = discord.Embed(title="💎 Luxury Casino Shop", color=discord.Color.purple())
-    embed.description = "Upgrade your profile status by purchasing high-tier vanity roles! Use `/buy [item_id]` to purchase an item.\n\n"
+    embed.description = "Upgrade your profile status by purchasing high-tier vanity roles! Select a role from the dropdown menu below to instantly finalize your purchase.\n\n"
     
     for item_id, info in SHOP_ITEMS.items():
         embed.add_field(
-            name=f"ID: {item_id} — {info['name']}", 
-            value=f"Price: **${info['price']:,}**", 
+            name=info["name"], 
+            value=f"Price: **${info['price']:,}**\n*{info['desc']}*", 
             inline=False
         )
         
-    embed.set_footer(text="Note: Roles are created automatically on purchase if missing.")
-    await interaction.response.send_message(embed=embed)
+    embed.set_footer(text="Roles are created automatically on purchase if missing.")
+    view = ShopDropdownView()
+    await interaction.response.send_message(embed=embed, view=view)
 
 
-@client.tree.command(name="buy", description="Purchase a specific premium luxury role directly from the casino shop")
-@app_commands.describe(item_id="The exact ID number of the shop item you want to buy")
-async def buy_command(interaction: discord.Interaction, item_id: int):
-    if item_id not in SHOP_ITEMS:
-        await interaction.response.send_message("❌ Invalid Item ID! Please review the options using `/shop`.", ephemeral=True)
-        return
-
-    await interaction.response.defer(ephemeral=True)
-    user = interaction.user
-    guild = interaction.guild
-    item = SHOP_ITEMS[item_id]
-    
-    current_bal = get_balance(user.id)
-    if current_bal < item["price"]:
-        await interaction.followup.send(
-            f"❌ Transaction Denied! You need **${item['price']:,}** to buy **{item['name']}**, but your current balance is only **${current_bal}**.", 
-            ephemeral=True
-        )
-        return
-
-    # Check if role exists, or automatically build it dynamically
-    role = discord.utils.get(guild.roles, name=item["name"])
-    if not role:
-        try:
-            role = await guild.create_role(
-                name=item["name"], 
-                color=item["color"], 
-                reason="Automatic dynamic creation via Casino Shop Purchase"
-            )
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "❌ Bot Configuration Error! The bot is missing `Manage Roles` authorization permission to create this role.", 
-                ephemeral=True
-            )
-            return
-        except Exception as e:
-            await interaction.followup.send(f"❌ Structural error generating server role: {e}", ephemeral=True)
-            return
-
-    if role in user.roles:
-        await interaction.followup.send(f"⚠️ Account Note: You already own the premium **{item['name']}** role designation!", ephemeral=True)
-        return
-
-    try:
-        await user.add_roles(role)
-    except discord.Forbidden:
-        await interaction.followup.send(
-            "❌ Hierarchy Permission Exception! This role is positioned higher than the bot's current maximum management group tier.", 
-            ephemeral=True
-        )
-        return
-
-    # Success: Deduct balance and commit updates
-    update_balance(user.id, -item["price"])
-    new_bal = get_balance(user.id)
-    
-    embed = discord.Embed(title="🛍️ Premium Shop Purchase Successful!", color=discord.Color.green())
-    embed.description = f"Congratulations {user.mention}! You have successfully purchased and unlocked the **{item['name']}** role!"
-    embed.add_field(name="Amount Charged", value=f"-${item['price']:,}", inline=True)
-    embed.add_field(name="Remaining Funds Wallet", value=f"${new_bal:,}", inline=True)
-    embed.set_footer(text="Vanity badge profile upgrade complete ✨")
-    
-    await interaction.followup.send(embed=embed, ephemeral=False)
-
-
-@client.tree.command(name="give_money", description="Developer Administrative Command: Grant custom virtual funds to a specific user")
-@app_commands.describe(user="Target member to adjust funds", amount="The money value to award (use negative to deduct)")
-async def give_money(interaction: discord.Interaction, user: discord.User, amount: int):
+@client.tree.command(name="manage_money", description="Developer Administrative Command: Adjust or deduct user virtual balance")
+@app_commands.describe(action="Financial action to take", user="Target member account", amount="The exact non-negative money size")
+@app_commands.choices(action=[
+    app_commands.Choice(name="Add Balance ➕", value="add"),
+    app_commands.Choice(name="Deduct Balance ➖", value="deduct")
+])
+async def manage_money(interaction: discord.Interaction, action: str, user: discord.User, amount: int):
     if interaction.user.id != interaction.client.application.owner.id and interaction.user.id != 339082987114627072:
         await interaction.response.send_message("❌ Access Denied! This command is strictly reserved for the Bot Creator.", ephemeral=True)
         return
-    update_balance(user.id, amount)
+    
+    if amount < 0:
+        await interaction.response.send_message("❌ Error: Value must be a positive number.", ephemeral=True)
+        return
+
+    actual_amount = amount if action == "add" else -amount
+    update_balance(user.id, actual_amount)
     new_bal = get_balance(user.id)
+    
     embed = discord.Embed(title="⚙️ Executive Administrative Action", color=discord.Color.purple())
+    embed.add_field(name="Action Executed", value="Balance Added ➕" if action == "add" else "Balance Deducted ➖", inline=True)
     embed.add_field(name="Target User Account", value=user.mention, inline=True)
-    embed.add_field(name="Financial Adjustment", value=f"**${amount}**", inline=True)
-    embed.add_field(name="New Resulting Balance", value=f"**${new_bal}**", inline=False)
+    embed.add_field(name="Value Size Change", value=f"${amount:,}", inline=False)
+    embed.add_field(name="New Resulting Balance", value=f"**${new_bal:,}**", inline=False)
     embed.set_footer(text="Action authorized by Core Bot Developer")
     await interaction.response.send_message(embed=embed)
 
