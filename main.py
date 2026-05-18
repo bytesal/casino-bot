@@ -82,12 +82,13 @@ def get_user_loan_tier(member):
             return tier["max_loan"], tier["interest"], tier["role"]
     return DEFAULT_LOAN_LIMIT, DEFAULT_INTEREST, "Default Player"
 
-IMG_COIN_FLIP = "https://media.giphy.com/media/l3vR16pONsV8cKkWk/giphy.gif"
-IMG_SLOTS = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM2ZicGdyZmw5N3Z2b3Fldmd5bWx2ZHdhaWJmNHYycmlwNXYzd29oNyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/VdbyGEvY4Qe64/giphy.gif"
-IMG_ROULETTE = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3drOHFyeGthdXRmaHV4OWxzd3NxdWlyajcyM3oxNDNidTVuNm1mciZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/26uf8rcYmRtoUo8Y8/giphy.gif"
-IMG_HORSE_RACING = "https://media.giphy.com/media/13Zt9nscX96I6s/giphy.gif"
-IMG_HEADS_RESULT = "https://media.discordapp.net/attachments/1113228965949685810/1145112111557058601/heads.png"
-IMG_TAILS_RESULT = "https://media.discordapp.net/attachments/1113228965949685810/1145112111959711774/tails.png"
+# HIGH-QUALITY VERIFIED CASINO GIFS & IMAGES
+IMG_COIN_FLIP = "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExNXN6MHZwd3RndXU3M3F6MndvM3BtYm92ZXpxdTlia3RhcG01N3N4dyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7bu3XilJ5XRE9NNm/giphy.gif"
+IMG_SLOTS = "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExbWZvYno1NTR3Y3VvYno4ZzFmbmFpZ2R5NDhkd3E3N3V5Y3F5b3pwMyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/VdbyGEvY4Qe64/giphy.gif"
+IMG_ROULETTE = "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExbWZid3p5dWh6cnVpaXAwZXAwODZpYnV6dWt6M2RiaWpld2p2MnkyMiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/26uf8rcYmRtoUo8Y8/giphy.gif"
+IMG_HORSE_RACING = "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHYwZWNvMGwzdzNreHlqMHBmYml4Zmt6ZmxtYzR0cmJwbjN5czc4ayZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/13Zt9nscX96I6s/giphy.gif"
+IMG_HEADS_RESULT = "https://i.postimg.cc/D0Yg0Xg7/heads.png"
+IMG_TAILS_RESULT = "https://i.postimg.cc/0jXmH8Xy/tails.png"
 
 # ===================== SLOTS GENERATION LOGIC =====================
 SLOT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇", "⭐", "💎", "7️⃣"]
@@ -114,8 +115,6 @@ def get_slot_payout(reels, bet):
     return 0, "No Combination 😔"
 
 # ===================== INTERACTIVE SHOP COMPONENTS =====================
-
-# Threshold: purchases AT OR ABOVE this price require confirmation
 CONFIRMATION_PRICE_THRESHOLD = 50_000
 
 async def execute_shop_purchase(interaction: discord.Interaction, user, guild, item_id: str):
@@ -182,7 +181,6 @@ class ShopConfirmView(discord.ui.View):
         return True
 
     async def on_timeout(self):
-        # Disable buttons silently when time runs out
         for item in self.children:
             item.disabled = True
 
@@ -228,7 +226,6 @@ class ShopDropdown(discord.ui.Select):
         user  = interaction.user
         guild = interaction.guild
 
-        # ── Debt check ──────────────────────────────────────────────────────
         user_data  = get_user_data(user.id)
         debt_role  = discord.utils.get(guild.roles, name="Debtor 🔴")
         if user_data.get("loan_owed", 0) > 0 or (debt_role and debt_role in user.roles):
@@ -243,7 +240,6 @@ class ShopDropdown(discord.ui.Select):
         item        = SHOP_ITEMS[item_id]
         current_bal = get_balance(user.id)
 
-        # ── Balance check ────────────────────────────────────────────────────
         if current_bal < item["price"]:
             await interaction.followup.send(
                 f"❌ Transaction Denied! You need **${item['price']:,}** but only have **${current_bal:,}**.",
@@ -251,7 +247,6 @@ class ShopDropdown(discord.ui.Select):
             )
             return
 
-        # ── Already owns check ───────────────────────────────────────────────
         existing_role = discord.utils.get(guild.roles, name=item["name"])
         if existing_role and existing_role in user.roles:
             await interaction.followup.send(
@@ -260,7 +255,6 @@ class ShopDropdown(discord.ui.Select):
             )
             return
 
-        # ── Confirmation gate for expensive items ────────────────────────────
         if item["price"] >= CONFIRMATION_PRICE_THRESHOLD:
             balance_after = current_bal - item["price"]
             confirm_embed = discord.Embed(
@@ -282,7 +276,6 @@ class ShopDropdown(discord.ui.Select):
             await interaction.followup.send(embed=confirm_embed, view=view, ephemeral=True)
             return
 
-        # ── Cheap items: purchase immediately ────────────────────────────────
         await execute_shop_purchase(interaction, user, guild, item_id)
 
 
@@ -363,7 +356,6 @@ class BlackjackView(discord.ui.View):
     @discord.ui.button(label="Double Down 💰", style=discord.ButtonStyle.secondary)
     async def double_down(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            # FIX: Check balance BEFORE stopping the view
             current_bal = get_balance(self.player_id)
             if current_bal < self.bet:
                 await interaction.response.send_message("❌ You do not have enough balance to Double Down!", ephemeral=True)
@@ -521,7 +513,6 @@ class SlotsReplayView(discord.ui.View):
         self.bet = bet
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # FIX: Added ownership check to SlotsReplayView
         if interaction.user.id != self.player_id:
             await interaction.response.send_message("❌ Launch your own machine session!", ephemeral=True)
             return False
@@ -658,7 +649,6 @@ class HorseRacingView(discord.ui.View):
                 return
             self.stop()
 
-            # FIX: Check balance before deducting
             current_bal = get_balance(self.player_id)
             if self.bet > current_bal:
                 await interaction.response.send_message("❌ Insufficient funds to place this bet!", ephemeral=True)
@@ -683,7 +673,7 @@ class HorseRacingView(discord.ui.View):
                 increment_stats(self.player_id, "wins")
                 new_bal = get_balance(self.player_id)
                 embed = discord.Embed(title="🐎 Turf Track Finish - 🎉 Win Division!", color=discord.Color.green())
-                embed.add_field(name="Payout Earned", value=f"**+${payout:,}**", inline=True)
+                embed.add_field(name="Payout Prize", value=f"**+${payout:,}**", inline=True)
             else:
                 update_balance(self.player_id, -self.bet)
                 increment_stats(self.player_id, "losses")
@@ -761,7 +751,6 @@ async def on_ready():
 
 @client.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
-    # FIX: Added full traceback logging for easier debugging
     traceback.print_exc()
     if isinstance(error, app_commands.CommandOnCooldown):
         await interaction.response.send_message(
@@ -825,7 +814,6 @@ async def balance(interaction: discord.Interaction):
 async def daily_bonus(interaction: discord.Interaction):
     user_id = interaction.user.id
     user_data = get_user_data(user_id)
-    # FIX: Use timezone-aware UTC datetime consistently
     now = datetime.now(timezone.utc)
 
     if user_data.get("last_daily"):
@@ -836,7 +824,6 @@ async def daily_bonus(interaction: discord.Interaction):
             except ValueError:
                 last_claimed = None
 
-        # FIX: Normalize to timezone-aware for safe comparison
         if last_claimed is not None:
             if last_claimed.tzinfo is None:
                 last_claimed = last_claimed.replace(tzinfo=timezone.utc)
@@ -1046,7 +1033,6 @@ async def shop_command(interaction: discord.Interaction):
     app_commands.Choice(name="Deduct Balance ➖", value="deduct")
 ])
 async def manage_money(interaction: discord.Interaction, action: str, user: discord.User, amount: int):
-    # FIX: Safely access application owner with proper await
     app_info = await interaction.client.application_info()
     if interaction.user.id != app_info.owner.id and interaction.user.id != 339082987114627072:
         await interaction.response.send_message("❌ Access Denied! This command is strictly reserved for the Bot Creator.", ephemeral=True)
@@ -1219,7 +1205,6 @@ async def coinflip_cmd(interaction: discord.Interaction, bet: int):
     embed.add_field(name="Wallet Account", value=f"${current_bal:,}", inline=True)
     embed.set_image(url=IMG_COIN_FLIP)
 
-    # FIX: Use a proper View subclass with interaction_check instead of inline closures
     view = CoinFlipView(user_id, bet)
 
     btn_heads = discord.ui.Button(label="Heads 🦅", style=discord.ButtonStyle.blurple)
