@@ -410,12 +410,10 @@ class SlotsReplayView(discord.ui.View):
         
         current_bal = get_balance(self.player_id)
         if self.bet > current_bal:
-            await interaction.response.send_message("❌ Insufficient vault credits to spin!", ephemeral=True)
+            await interaction.response.send_message("❌ Insufficient funds to re-spin!", ephemeral=True)
             return
             
         await interaction.response.defer()
-        
-        # Deduct wager upfront for logical economic accounting balance tracking
         update_balance(self.player_id, -self.bet)
         
         reels = spin_slots()
@@ -995,8 +993,6 @@ async def slots_cmd(interaction: discord.Interaction, bet: int):
         return
         
     await interaction.response.defer()
-    
-    # Deduct wager upfront for logical economic accounting balance tracking
     update_balance(user_id, -bet)
     
     reels = spin_slots()
