@@ -89,13 +89,37 @@ def get_user_loan_tier(member):
             return tier["max_loan"], tier["interest"], tier["role"]
     return DEFAULT_LOAN_LIMIT, DEFAULT_INTEREST, "Default Player"
 
-# IMAGE GRAPHICS COMPONENT ASSETS
-IMG_COIN_FLIP = "https://i.imgur.com/E8W8YfV.png"
-IMG_SLOTS = "https://i.imgur.com/vH6Zz2L.png"
-IMG_ROULETTE = "https://i.imgur.com/Yw4hO3F.png"
-IMG_HORSE_RACING = "https://i.imgur.com/zD1F3k9.png"
-IMG_HEADS_RESULT = "https://i.imgur.com/I9ZunmO.png"
-IMG_TAILS_RESULT = "https://i.imgur.com/vR6BfWl.png"
+# SECURED DIRECT ACCESSIBLE IMAGE ASSETS
+IMG_COIN_FLIP = "https://cdn.pixabay.com/photo/2016/11/29/13/21/astronomy-1869792_1280.jpg"
+IMG_SLOTS = "https://cdn.pixabay.com/photo/2017/01/03/01/07/reels-1948281_1280.jpg"
+IMG_ROULETTE = "https://cdn.pixabay.com/photo/2016/09/06/13/46/casino-1649104_1280.jpg"
+IMG_HORSE_RACING = "https://cdn.pixabay.com/photo/2015/11/07/11/48/racecourse-1031388_1280.jpg"
+IMG_HEADS_RESULT = "https://cdn.pixabay.com/photo/2017/02/02/10/38/coin-2032338_1280.png"
+IMG_TAILS_RESULT = "https://cdn.pixabay.com/photo/2017/02/02/10/38/gold-2032337_1280.png"
+
+# ===================== SLOTS GENERATION LOGIC =====================
+SLOT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇", "⭐", "💎", "7️⃣"]
+SLOT_PAYOUTS = {
+    ("💎", "💎", "💎"): 20,
+    ("7️⃣", "7️⃣", "7️⃣"): 15,
+    ("⭐", "⭐", "⭐"): 10,
+    ("🍇", "🍇", "🍇"): 8,
+    ("🍊", "🍊", "🍊"): 6,
+    ("🍋", "🍋", "🍋"): 4,
+    ("🍒", "🍒", "🍒"): 3,
+}
+
+def spin_slots():
+    weights = [20, 18, 16, 14, 12, 8, 5]
+    return random.choices(SLOT_SYMBOLS, weights=weights, k=3)
+
+def get_slot_payout(reels, bet):
+    combo = tuple(reels)
+    if combo in SLOT_PAYOUTS:
+        return SLOT_PAYOUTS[combo] * bet, f"**Triple {combo[0]}** 🎊"
+    if reels.count("🍒") == 2:
+        return bet, "Double Cherry 🍒🍒"
+    return 0, "No Combination 😔"
 
 # ===================== INTERACTIVE SHOP COMPONENTS =====================
 class ShopDropdown(discord.ui.Select):
@@ -360,7 +384,6 @@ class CoinFlipView(discord.ui.View):
         embed.add_field(name="Statement Log", value=f"{msg}\nNew balance: **${new_bal:,}**", inline=False)
         embed.set_image(url=res_img)
         
-        # Enable replay button framework views
         await interaction.response.edit_message(embed=embed, view=CoinFlipReplayView(self.player_id, self.bet, choice))
 
 class CoinFlipReplayView(discord.ui.View):
@@ -423,10 +446,6 @@ class SlotsReplayView(discord.ui.View):
 
 
 # ===================== ROULETTE INTERACTIVE 🎡 =====================
-ROULETTE_NUMBERS = list(range(0, 37))
-RED_NUMBERS = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
-BLACK_NUMBERS = {2,4,6,8,10,11,13,15,17,20,22,24,26,28,29,31,33,35}
-
 class RouletteView(discord.ui.View):
     def __init__(self, player_id, bet):
         super().__init__(timeout=45)
@@ -485,14 +504,6 @@ class RouletteView(discord.ui.View):
 
 
 # ===================== HORSE RACING INTERACTIVE 🐎 =====================
-HORSES = [
-    {"name": "Lightning ⚡", "odds": 2.0},
-    {"name": "Blizzard 💨", "odds": 2.5},
-    {"name": "Falcon 🦅", "odds": 3.0},
-    {"name": "Phantom 😈", "odds": 4.0},
-    {"name": "Clover 🍀", "odds": 5.0},
-]
-
 class HorseRacingView(discord.ui.View):
     def __init__(self, player_id, bet):
         super().__init__(timeout=45)
@@ -636,7 +647,7 @@ async def help_command(interaction: discord.Interaction):
             "`/blackjack [bet]` - Play a high-stakes game of Blackjack.\n"
             "`/coinflip [bet]` - Open interactive graphic Coin Flip interface panel.\n"
             "`/slots [bet]` - Spin the rich asset visual slot machine interface.\n"
-            "`/roulette [bet] [number]` - Bet on a color, type, or specific target number.\n"
+            "`/roulette [bet]` - Bet on a color, type, or market grid wheel layout.\n"
             "`/horse_racing [bet]` - Wager on server horse derby racing boards.\n"
         ),
         inline=False
@@ -950,7 +961,6 @@ async def coinflip_cmd(interaction: discord.Interaction, bet: int):
     embed.add_field(name="Wallet Account", value=f"${current_bal:,}", inline=True)
     embed.set_image(url=IMG_COIN_FLIP)
     
-    # Inline custom temporary action layout buttons
     view = discord.ui.View(timeout=45)
     async def make_click(choice_val):
         async def _cb(i: discord.Interaction):
