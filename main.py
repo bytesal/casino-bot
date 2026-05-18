@@ -4,10 +4,11 @@ from discord.ext import commands, tasks
 import random
 import os
 import asyncio
+import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 from pymongo import MongoClient
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 # ===================== MongoDB (Secured via Environment Variables) =====================
 MONGO_URI = os.getenv("MONGO_URI")
@@ -19,33 +20,25 @@ def get_user_data(user_id):
     user_data = balances_col.find_one({"user_id": user_id})
     if not user_data:
         default_data = {
-            "user_id": user_id, 
-            "balance": 1000, 
-            "wins": 0, 
+            "user_id": user_id,
+            "balance": 1000,
+            "wins": 0,
             "losses": 0,
             "last_daily": None,
             "loan_owed": 0
         }
         balances_col.insert_one(default_data)
         return default_data
-    
+
     updated = False
-    if "wins" not in user_data:
-        user_data["wins"] = 0
-        updated = True
-    if "losses" not in user_data:
-        user_data["losses"] = 0
-        updated = True
-    if "last_daily" not in user_data:
-        user_data["last_daily"] = None
-        updated = True
-    if "loan_owed" not in user_data:
-        user_data["loan_owed"] = 0
-        updated = True
-        
+    for field, default in [("wins", 0), ("losses", 0), ("last_daily", None), ("loan_owed", 0)]:
+        if field not in user_data:
+            user_data[field] = default
+            updated = True
+
     if updated:
         balances_col.update_one({"user_id": user_id}, {"$set": user_data})
-        
+
     return user_data
 
 def get_balance(user_id):
@@ -82,7 +75,13 @@ LOAN_LIMITS = [
 DEFAULT_LOAN_LIMIT = 2000
 DEFAULT_INTEREST = 0.15
 
-# HIGHLY STABLE DIRECT VERIFIED OPEN ASSETS
+def get_user_loan_tier(member):
+    user_roles = [role.name for role in member.roles]
+    for tier in LOAN_LIMITS:
+        if tier["role"] in user_roles:
+            return tier["max_loan"], tier["interest"], tier["role"]
+    return DEFAULT_LOAN_LIMIT, DEFAULT_INTEREST, "Default Player"
+
 IMG_COIN_FLIP = "https://media.giphy.com/media/l3vR16pONsV8cKkWk/giphy.gif"
 IMG_SLOTS = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM2ZicGdyZmw5N3Z2b3Fldmd5bWx2ZHdhaWJmNHYycmlwNXYzd29oNyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/VdbyGEvY4Qe64/giphy.gif"
 IMG_ROULETTE = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3drOHFyeGthdXRmaHV4OWxzd3NxdWlyajcyM3oxNDNidTVuNm1mciZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/26uf8rcYmRtoUo8Y8/giphy.gif"
@@ -127,7 +126,7 @@ class ShopDropdown(discord.ui.Select):
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
         guild = interaction.guild
-        
+
         user_data = get_user_data(user.id)
         debt_role = discord.utils.get(guild.roles, name="Debtor 🔴")
         if user_data.get("loan_owed", 0) > 0 or (debt_role and debt_role in user.roles):
@@ -139,11 +138,11 @@ class ShopDropdown(discord.ui.Select):
 
         item_id = self.values[0]
         item = SHOP_ITEMS[item_id]
-        
+
         current_bal = get_balance(user.id)
         if current_bal < item["price"]:
             await interaction.followup.send(
-                f"❌ Transaction Denied! You need **${item['price']:,}** to buy **{item['name']}**, but your current balance is only **${current_bal}**.", 
+                f"❌ Transaction Denied! You need **${item['price']:,}** to buy **{item['name']}**, but your current balance is only **${current_bal:,}**.",
                 ephemeral=True
             )
             return
@@ -152,13 +151,13 @@ class ShopDropdown(discord.ui.Select):
         if not role:
             try:
                 role = await guild.create_role(
-                    name=item["name"], 
-                    color=item["color"], 
+                    name=item["name"],
+                    color=item["color"],
                     reason="Automatic dynamic creation via Casino Interactive Shop"
                 )
             except discord.Forbidden:
                 await interaction.followup.send(
-                    "❌ Bot Configuration Error! The bot is missing `Manage Roles` authorization permission to create this role.", 
+                    "❌ Bot Configuration Error! The bot is missing `Manage Roles` authorization permission to create this role.",
                     ephemeral=True
                 )
                 return
@@ -174,20 +173,20 @@ class ShopDropdown(discord.ui.Select):
             await user.add_roles(role)
         except discord.Forbidden:
             await interaction.followup.send(
-                "❌ Hierarchy Permission Exception! This role is positioned higher than the bot's current maximum management group tier.", 
+                "❌ Hierarchy Permission Exception! This role is positioned higher than the bot's current maximum management group tier.",
                 ephemeral=True
             )
             return
 
         update_balance(user.id, -item["price"])
         new_bal = get_balance(user.id)
-        
+
         embed = discord.Embed(title="🛍️ Interactive Shop Purchase Successful!", color=discord.Color.green())
         embed.description = f"Congratulations {user.mention}! You have successfully purchased and unlocked the **{item['name']}** role directly from the menu!"
         embed.add_field(name="Amount Charged", value=f"-${item['price']:,}", inline=True)
         embed.add_field(name="Remaining Funds Wallet", value=f"${new_bal:,}", inline=True)
         embed.set_footer(text="Vanity badge profile upgrade complete ✨")
-        
+
         await interaction.followup.send(embed=embed, ephemeral=False)
 
 class ShopDropdownView(discord.ui.View):
@@ -250,30 +249,34 @@ class BlackjackView(discord.ui.View):
                 embed = discord.Embed(title="💥 Blackjack - Busted!", color=discord.Color.red())
                 embed.add_field(name="Your Hand", value=f"{self.get_hand_string(self.player_hand)} (Score: {player_score})", inline=False)
                 embed.add_field(name="Dealer Hand", value=f"{self.dealer_hand[0]}, [Hidden]", inline=False)
-                embed.add_field(name="Result", value=f"You lost **${self.bet}**! Your new balance is **${new_bal}**.", inline=False)
+                embed.add_field(name="Result", value=f"You lost **${self.bet:,}**! Your new balance is **${new_bal:,}**.", inline=False)
                 self.stop()
                 await interaction.response.edit_message(embed=embed, view=None)
             else:
                 embed = discord.Embed(title="🃏 Blackjack Game", color=discord.Color.blue())
                 embed.add_field(name="Your Hand", value=f"{self.get_hand_string(self.player_hand)} (Score: {player_score})", inline=False)
                 embed.add_field(name="Dealer Hand", value=f"{self.dealer_hand[0]}, [Hidden]", inline=False)
-                embed.set_footer(text=f"Current Bet: ${self.bet}")
+                embed.set_footer(text=f"Current Bet: ${self.bet:,}")
                 await interaction.response.edit_message(embed=embed, view=self)
         except Exception as e:
+            traceback.print_exc()
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"Error: {e}", ephemeral=True)
 
     @discord.ui.button(label="Double Down 💰", style=discord.ButtonStyle.secondary)
     async def double_down(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            # FIX: Check balance BEFORE stopping the view
             current_bal = get_balance(self.player_id)
-            if current_bal < self.bet * 2:
+            if current_bal < self.bet:
                 await interaction.response.send_message("❌ You do not have enough balance to Double Down!", ephemeral=True)
                 return
+
             self.stop()
             self.bet *= 2
             self.player_hand.append(self.deck.pop())
             player_score = self.calculate_score(self.player_hand)
+
             if player_score > 21:
                 update_balance(self.player_id, -self.bet)
                 increment_stats(self.player_id, "losses")
@@ -281,30 +284,34 @@ class BlackjackView(discord.ui.View):
                 embed = discord.Embed(title="💥 Blackjack - Busted on Double!", color=discord.Color.red())
                 embed.add_field(name="Your Hand", value=f"{self.get_hand_string(self.player_hand)} (Score: {player_score})", inline=False)
                 embed.add_field(name="Dealer Hand", value=self.get_hand_string(self.dealer_hand), inline=False)
-                embed.add_field(name="Result", value=f"You lost **${self.bet}**! Your balance is: **${new_bal}**.", inline=False)
+                embed.add_field(name="Result", value=f"You lost **${self.bet:,}**! Your balance is: **${new_bal:,}**.", inline=False)
                 await interaction.response.edit_message(embed=embed, view=None)
                 return
+
             dealer_score = self.calculate_score(self.dealer_hand)
             while dealer_score < 17:
                 self.dealer_hand.append(self.deck.pop())
                 dealer_score = self.calculate_score(self.dealer_hand)
+
             if dealer_score > 21 or player_score > dealer_score:
                 update_balance(self.player_id, self.bet)
                 increment_stats(self.player_id, "wins")
-                title, color, res_msg = "You Win! 🎉", discord.Color.green(), f"You won **${self.bet}**!"
+                title, color, res_msg = "You Win! 🎉", discord.Color.green(), f"You won **${self.bet:,}**!"
             elif player_score < dealer_score:
                 update_balance(self.player_id, -self.bet)
                 increment_stats(self.player_id, "losses")
-                title, color, res_msg = "Dealer Wins! ❌", discord.Color.red(), f"You lost **${self.bet}**!"
+                title, color, res_msg = "Dealer Wins! ❌", discord.Color.red(), f"You lost **${self.bet:,}**!"
             else:
                 title, color, res_msg = "Push! 🤝", discord.Color.gold(), "Your bet was returned."
+
             new_bal = get_balance(self.player_id)
             embed = discord.Embed(title=f"🃏 Blackjack (Double Down) - {title}", color=color)
             embed.add_field(name="Your Hand", value=f"{self.get_hand_string(self.player_hand)} (Score: {player_score})", inline=False)
             embed.add_field(name="Dealer Hand", value=f"{self.get_hand_string(self.dealer_hand)} (Score: {dealer_score})", inline=False)
-            embed.add_field(name="Result", value=f"{res_msg} Your new balance is **${new_bal}**.", inline=False)
+            embed.add_field(name="Result", value=f"{res_msg} Your new balance is **${new_bal:,}**.", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
         except Exception as e:
+            traceback.print_exc()
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"Error: {e}", ephemeral=True)
 
@@ -317,23 +324,26 @@ class BlackjackView(discord.ui.View):
             while dealer_score < 17:
                 self.dealer_hand.append(self.deck.pop())
                 dealer_score = self.calculate_score(self.dealer_hand)
+
             if dealer_score > 21 or player_score > dealer_score:
                 update_balance(self.player_id, self.bet)
                 increment_stats(self.player_id, "wins")
-                title, color, res_msg = "You Win! 🎉", discord.Color.green(), f"Congratulations! You won **${self.bet}**!"
+                title, color, res_msg = "You Win! 🎉", discord.Color.green(), f"Congratulations! You won **${self.bet:,}**!"
             elif player_score < dealer_score:
                 update_balance(self.player_id, -self.bet)
                 increment_stats(self.player_id, "losses")
-                title, color, res_msg = "Dealer Wins! ❌", discord.Color.red(), f"You lost **${self.bet}**!"
+                title, color, res_msg = "Dealer Wins! ❌", discord.Color.red(), f"You lost **${self.bet:,}**!"
             else:
                 title, color, res_msg = "Push! 🤝", discord.Color.gold(), "Your bet was returned."
+
             new_bal = get_balance(self.player_id)
             embed = discord.Embed(title=f"🃏 Blackjack - {title}", color=color)
             embed.add_field(name="Your Hand", value=f"{self.get_hand_string(self.player_hand)} (Score: {player_score})", inline=False)
             embed.add_field(name="Dealer Hand", value=f"{self.get_hand_string(self.dealer_hand)} (Score: {dealer_score})", inline=False)
-            embed.add_field(name="Result", value=f"{res_msg} Your new balance is **${new_bal}**.", inline=False)
+            embed.add_field(name="Result", value=f"{res_msg} Your new balance is **${new_bal:,}**.", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
         except Exception as e:
+            traceback.print_exc()
             if not interaction.response.is_done():
                 await interaction.response.send_message(f"Error: {e}", ephemeral=True)
 
@@ -354,13 +364,16 @@ class CoinFlipView(discord.ui.View):
     async def process_flip(self, interaction: discord.Interaction, choice: str):
         current_bal = get_balance(self.player_id)
         if self.bet > current_bal:
-            await interaction.response.send_message("❌ Balance too low to re-flip this bet size!", ephemeral=True)
+            if interaction.response.is_done():
+                await interaction.followup.send("❌ Balance too low to flip this bet size!", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Balance too low to flip this bet size!", ephemeral=True)
             return
 
         result = random.choice(["heads", "tails"])
         won = choice == result
         res_img = IMG_HEADS_RESULT if result == "heads" else IMG_TAILS_RESULT
-        
+
         if won:
             update_balance(self.player_id, self.bet)
             increment_stats(self.player_id, "wins")
@@ -376,8 +389,13 @@ class CoinFlipView(discord.ui.View):
         embed.add_field(name="Flip Outcome", value=result.upper(), inline=True)
         embed.add_field(name="Statement Log", value=f"{msg}\nNew balance: **${new_bal:,}**", inline=False)
         embed.set_image(url=res_img)
-        
-        await interaction.response.edit_message(embed=embed, view=CoinFlipReplayView(self.player_id, self.bet, choice))
+
+        replay_view = CoinFlipReplayView(self.player_id, self.bet, choice)
+        if interaction.response.is_done():
+            await interaction.followup.edit_message(message_id=interaction.message.id, embed=embed, view=replay_view)
+        else:
+            await interaction.response.edit_message(embed=embed, view=replay_view)
+
 
 class CoinFlipReplayView(discord.ui.View):
     def __init__(self, player_id, bet, choice):
@@ -386,11 +404,14 @@ class CoinFlipReplayView(discord.ui.View):
         self.bet = bet
         self.choice = choice
 
-    @discord.ui.button(label="Flip Again 🔄", style=discord.ButtonStyle.green)
-    async def flip_again(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.player_id:
             await interaction.response.send_message("❌ Build your own game panel!", ephemeral=True)
-            return
+            return False
+        return True
+
+    @discord.ui.button(label="Flip Again 🔄", style=discord.ButtonStyle.green)
+    async def flip_again(self, interaction: discord.Interaction, button: discord.ui.Button):
         handler = CoinFlipView(self.player_id, self.bet)
         await handler.process_flip(interaction, self.choice)
 
@@ -402,24 +423,27 @@ class SlotsReplayView(discord.ui.View):
         self.player_id = player_id
         self.bet = bet
 
-    @discord.ui.button(label="Spin Again 🎰", style=discord.ButtonStyle.blurple)
-    async def spin_again(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # FIX: Added ownership check to SlotsReplayView
         if interaction.user.id != self.player_id:
             await interaction.response.send_message("❌ Launch your own machine session!", ephemeral=True)
-            return
-        
+            return False
+        return True
+
+    @discord.ui.button(label="Spin Again 🎰", style=discord.ButtonStyle.blurple)
+    async def spin_again(self, interaction: discord.Interaction, button: discord.ui.Button):
         current_bal = get_balance(self.player_id)
         if self.bet > current_bal:
             await interaction.response.send_message("❌ Insufficient funds to re-spin!", ephemeral=True)
             return
-            
+
         await interaction.response.defer()
         update_balance(self.player_id, -self.bet)
-        
+
         reels = spin_slots()
         payout, combo_name = get_slot_payout(reels, self.bet)
         reels_display = " | ".join(reels)
-        
+
         if payout > 0:
             update_balance(self.player_id, payout)
             increment_stats(self.player_id, "wins")
@@ -440,6 +464,10 @@ class SlotsReplayView(discord.ui.View):
 
 
 # ===================== ROULETTE INTERACTIVE 🎡 =====================
+ROULETTE_NUMBERS = list(range(0, 37))
+RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
+BLACK_NUMBERS = {2, 4, 6, 8, 10, 11, 13, 15, 17, 20, 22, 24, 26, 28, 29, 31, 33, 35}
+
 class RouletteView(discord.ui.View):
     def __init__(self, player_id, bet):
         super().__init__(timeout=45)
@@ -458,12 +486,18 @@ class RouletteView(discord.ui.View):
         color_emoji = "🟢" if result == 0 else ("🔴" if result in RED_NUMBERS else "⚫")
         won = False
         payout = 0
-        if bet_type == "red" and result in RED_NUMBERS: won = True; payout = self.bet
-        elif bet_type == "black" and result in BLACK_NUMBERS: won = True; payout = self.bet
-        elif bet_type == "even" and result != 0 and result % 2 == 0: won = True; payout = self.bet
-        elif bet_type == "odd" and result % 2 == 1: won = True; payout = self.bet
-        elif bet_type == "low" and 1 <= result <= 18: won = True; payout = self.bet
-        elif bet_type == "high" and 19 <= result <= 36: won = True; payout = self.bet
+        if bet_type == "red" and result in RED_NUMBERS:
+            won = True; payout = self.bet
+        elif bet_type == "black" and result in BLACK_NUMBERS:
+            won = True; payout = self.bet
+        elif bet_type == "even" and result != 0 and result % 2 == 0:
+            won = True; payout = self.bet
+        elif bet_type == "odd" and result % 2 == 1:
+            won = True; payout = self.bet
+        elif bet_type == "low" and 1 <= result <= 18:
+            won = True; payout = self.bet
+        elif bet_type == "high" and 19 <= result <= 36:
+            won = True; payout = self.bet
 
         if won:
             update_balance(self.player_id, payout)
@@ -526,18 +560,25 @@ class HorseRacingView(discord.ui.View):
                 await interaction.response.send_message("❌ Grab alternative racing slip brackets!", ephemeral=True)
                 return
             self.stop()
+
+            # FIX: Check balance before deducting
+            current_bal = get_balance(self.player_id)
+            if self.bet > current_bal:
+                await interaction.response.send_message("❌ Insufficient funds to place this bet!", ephemeral=True)
+                return
+
             chosen_horse = HORSES[horse_index]
             weights = [1 / h["odds"] for h in HORSES]
             winner_index = random.choices(range(len(HORSES)), weights=weights, k=1)[0]
             winner_horse = HORSES[winner_index]
             others = [h for i, h in enumerate(HORSES) if i != winner_index]
             random.shuffle(others)
-            
+
             race_display = [f"🥇 {winner_horse['name']}"]
             medals = ["🥈", "🥉", "4.", "5."]
             for rank, h in enumerate(others):
                 race_display.append(f"{medals[rank]} {h['name']}")
-                
+
             won = horse_index == winner_index
             if won:
                 payout = int(self.bet * chosen_horse["odds"])
@@ -575,7 +616,6 @@ class BlackjackBot(commands.Bot):
         self.update_live_stats.start()
 
     async def on_error(self, event_method, *args, **kwargs):
-        import traceback
         print(f"[Bot Error in {event_method}]")
         traceback.print_exc()
 
@@ -587,7 +627,6 @@ class BlackjackBot(commands.Bot):
             pipeline = [{"$group": {"_id": None, "total": {"$sum": "$balance"}}}]
             result = list(balances_col.aggregate(pipeline))
             total_circulation = result[0]["total"] if result else 0
-
             active_loans = balances_col.count_documents({"loan_owed": {"$gt": 0}})
 
             if self.current_status_index == 0:
@@ -598,7 +637,7 @@ class BlackjackBot(commands.Bot):
                 self.current_status_index = 0
 
             custom_activity = discord.Activity(
-                type=discord.ActivityType.watching, 
+                type=discord.ActivityType.watching,
                 name=activity_text
             )
             await self.change_presence(activity=custom_activity)
@@ -625,8 +664,13 @@ async def on_ready():
 
 @client.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    # FIX: Added full traceback logging for easier debugging
+    traceback.print_exc()
     if isinstance(error, app_commands.CommandOnCooldown):
-        await interaction.response.send_message(f"⏳ On Cooldown! You can use this command again in **{error.retry_after:.1f}** seconds.", ephemeral=True)
+        await interaction.response.send_message(
+            f"⏳ On Cooldown! You can use this command again in **{error.retry_after:.1f}** seconds.",
+            ephemeral=True
+        )
         return
     msg = f"An error occurred: {error}"
     try:
@@ -684,8 +728,9 @@ async def balance(interaction: discord.Interaction):
 async def daily_bonus(interaction: discord.Interaction):
     user_id = interaction.user.id
     user_data = get_user_data(user_id)
-    now = datetime.utcnow()
-    
+    # FIX: Use timezone-aware UTC datetime consistently
+    now = datetime.now(timezone.utc)
+
     if user_data.get("last_daily"):
         last_claimed = user_data["last_daily"]
         if isinstance(last_claimed, str):
@@ -694,28 +739,31 @@ async def daily_bonus(interaction: discord.Interaction):
             except ValueError:
                 last_claimed = None
 
-        if last_claimed:
+        # FIX: Normalize to timezone-aware for safe comparison
+        if last_claimed is not None:
+            if last_claimed.tzinfo is None:
+                last_claimed = last_claimed.replace(tzinfo=timezone.utc)
             next_claim = last_claimed + timedelta(days=1)
             if now < next_claim:
                 time_remaining = next_claim - now
                 hours, remainder = divmod(int(time_remaining.total_seconds()), 3600)
                 minutes, _ = divmod(remainder, 60)
                 await interaction.response.send_message(
-                    f"⏳ You have already claimed your daily reward! Please return in **{hours} hours and {minutes} minutes**.", 
+                    f"⏳ You have already claimed your daily reward! Please return in **{hours} hours and {minutes} minutes**.",
                     ephemeral=True
                 )
                 return
 
     daily_reward = 500
     balances_col.update_one(
-        {"user_id": user_id}, 
+        {"user_id": user_id},
         {"$set": {"last_daily": now}}
     )
     update_balance(user_id, daily_reward)
     new_bal = get_balance(user_id)
-    
+
     embed = discord.Embed(title="🎁 Daily Reward Allowance", color=discord.Color.gold())
-    embed.description = f"Successfully collected your daily grant reward of **${daily_reward}**! 💸"
+    embed.description = f"Successfully collected your daily grant reward of **${daily_reward:,}**! 💸"
     embed.set_footer(text=f"Your current balance is now: ${new_bal:,}")
     await interaction.response.send_message(embed=embed)
 
@@ -724,16 +772,16 @@ async def daily_bonus(interaction: discord.Interaction):
 async def leaderboard(interaction: discord.Interaction):
     await interaction.response.defer()
     top_users = list(balances_col.find().sort("balance", -1).limit(10))
-    
+
     embed = discord.Embed(title="🏆 Casino Wealth Leaderboard", color=discord.Color.gold())
     description_lines = []
-    
+
     medals = ["🥇", "🥈", "🥉"]
     for idx, u_data in enumerate(top_users):
         user_id = u_data["user_id"]
         bal = u_data["balance"]
         rank_label = medals[idx] if idx < 3 else f"`#{idx + 1}`"
-        
+
         try:
             member = await interaction.guild.fetch_member(user_id)
             name_display = member.display_name
@@ -741,9 +789,9 @@ async def leaderboard(interaction: discord.Interaction):
             name_display = f"User({user_id})"
         except Exception:
             name_display = f"User({user_id})"
-            
+
         description_lines.append(f"{rank_label} **{name_display}** — ${bal:,}")
-        
+
     embed.description = "\n".join(description_lines) if description_lines else "No users recorded yet."
     embed.set_footer(text="Keep working and playing to climb to the peak!")
     await interaction.followup.send(embed=embed)
@@ -754,12 +802,12 @@ async def leaderboard(interaction: discord.Interaction):
 async def stats_command(interaction: discord.Interaction, user: discord.User = None):
     target_user = user or interaction.user
     user_data = get_user_data(target_user.id)
-    
+
     wins = user_data.get("wins", 0)
     losses = user_data.get("losses", 0)
     total_games = wins + losses
     win_rate = (wins / total_games * 100) if total_games > 0 else 0.0
-    
+
     embed = discord.Embed(title=f"📊 Analytics Summary - {target_user.display_name}", color=discord.Color.blue())
     embed.set_thumbnail(url=target_user.display_avatar.url)
     embed.add_field(name="Current Balance", value=f"${user_data.get('balance', 0):,}", inline=False)
@@ -774,14 +822,14 @@ async def stats_command(interaction: discord.Interaction, user: discord.User = N
 async def shop_command(interaction: discord.Interaction):
     embed = discord.Embed(title="💎 Luxury Casino Shop", color=discord.Color.purple())
     embed.description = "Upgrade your profile status by purchasing high-tier vanity roles! Select a role from the dropdown menu below to instantly finalize your purchase.\n\n"
-    
+
     for item_id, info in SHOP_ITEMS.items():
         embed.add_field(
-            name=info["name"], 
-            value=f"Price: **${info['price']:,}**\n*{info['desc']}*", 
+            name=info["name"],
+            value=f"Price: **${info['price']:,}**\n*{info['desc']}*",
             inline=False
         )
-        
+
     embed.set_footer(text="Roles are created automatically on purchase if missing.")
     view = ShopDropdownView()
     await interaction.response.send_message(embed=embed, view=view)
@@ -794,10 +842,12 @@ async def shop_command(interaction: discord.Interaction):
     app_commands.Choice(name="Deduct Balance ➖", value="deduct")
 ])
 async def manage_money(interaction: discord.Interaction, action: str, user: discord.User, amount: int):
-    if interaction.user.id != interaction.client.application.owner.id and interaction.user.id != 339082987114627072:
+    # FIX: Safely access application owner with proper await
+    app_info = await interaction.client.application_info()
+    if interaction.user.id != app_info.owner.id and interaction.user.id != 339082987114627072:
         await interaction.response.send_message("❌ Access Denied! This command is strictly reserved for the Bot Creator.", ephemeral=True)
         return
-    
+
     if amount < 0:
         await interaction.response.send_message("❌ Error: Value must be a positive number.", ephemeral=True)
         return
@@ -805,7 +855,7 @@ async def manage_money(interaction: discord.Interaction, action: str, user: disc
     actual_amount = amount if action == "add" else -amount
     update_balance(user.id, actual_amount)
     new_bal = get_balance(user.id)
-    
+
     embed = discord.Embed(title="⚙️ Executive Administrative Action", color=discord.Color.purple())
     embed.add_field(name="Action Executed", value="Balance Added ➕" if action == "add" else "Balance Deducted ➖", inline=True)
     embed.add_field(name="Target User Account", value=user.mention, inline=True)
@@ -821,7 +871,7 @@ async def borrow_command(interaction: discord.Interaction, amount: int):
     await interaction.response.defer(ephemeral=True)
     user = interaction.user
     guild = interaction.guild
-    
+
     user_data = get_user_data(user.id)
     if user_data.get("loan_owed", 0) > 0:
         await interaction.followup.send(
@@ -829,11 +879,11 @@ async def borrow_command(interaction: discord.Interaction, amount: int):
             ephemeral=True
         )
         return
-        
+
     if amount < 100:
         await interaction.followup.send("❌ Minimum required borrowing amount size is **$100**.", ephemeral=True)
         return
-        
+
     max_loan, interest_rate, tier_name = get_user_loan_tier(user)
     if amount > max_loan:
         await interaction.followup.send(
@@ -846,8 +896,8 @@ async def borrow_command(interaction: discord.Interaction, amount: int):
     if not debt_role:
         try:
             debt_role = await guild.create_role(
-                name="Debtor 🔴", 
-                color=discord.Color.red(), 
+                name="Debtor 🔴",
+                color=discord.Color.red(),
                 reason="Automatic creation of system Debtor group"
             )
         except discord.Forbidden:
@@ -863,14 +913,14 @@ async def borrow_command(interaction: discord.Interaction, amount: int):
     total_debt = int(amount * (1 + interest_rate))
     balances_col.update_one({"user_id": user.id}, {"$set": {"loan_owed": total_debt}})
     update_balance(user.id, amount)
-    
+
     embed = discord.Embed(title="🏦 Casino Vault Loan Approved!", color=discord.Color.orange())
     embed.description = f"Your requested cash allowance has been dispatched to your balance vault."
     embed.add_field(name="Principal Funded", value=f"${amount:,}", inline=True)
     embed.add_field(name="Interest Rate Applied", value=f"{interest_rate * 100:.0f}% ({tier_name})", inline=True)
     embed.add_field(name="Total Owed Repayment", value=f"**${total_debt:,}**", inline=False)
     embed.set_footer(text="Profile shop operations frozen until debt settlement via /pay_loan.")
-    
+
     await interaction.followup.send(embed=embed, ephemeral=False)
 
 
@@ -879,14 +929,14 @@ async def pay_loan_command(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     user = interaction.user
     guild = interaction.guild
-    
+
     user_data = get_user_data(user.id)
     owed = user_data.get("loan_owed", 0)
-    
+
     if owed <= 0:
         await interaction.followup.send("❌ Account Status: Your profile does not hold any active unpaid debt values.", ephemeral=True)
         return
-        
+
     current_bal = get_balance(user.id)
     if current_bal < owed:
         await interaction.followup.send(
@@ -897,7 +947,7 @@ async def pay_loan_command(interaction: discord.Interaction):
 
     update_balance(user.id, -owed)
     balances_col.update_one({"user_id": user.id}, {"$set": {"loan_owed": 0}})
-    
+
     debt_role = discord.utils.get(guild.roles, name="Debtor 🔴")
     if debt_role and debt_role in user.roles:
         try:
@@ -911,7 +961,7 @@ async def pay_loan_command(interaction: discord.Interaction):
     embed.add_field(name="Amount Paid", value=f"${owed:,}", inline=True)
     embed.add_field(name="Remaining Funds Wallet", value=f"${new_bal:,}", inline=True)
     embed.set_footer(text="Your account profiles limitations have been fully removed.")
-    
+
     await interaction.followup.send(embed=embed, ephemeral=False)
 
 
@@ -929,20 +979,22 @@ async def blackjack(interaction: discord.Interaction, bet: int):
         await interaction.followup.send("❌ The bet must be greater than 0.", ephemeral=True)
         return
     if bet > current_bal:
-        await interaction.followup.send(f"❌ Rejected! You cannot bet **${bet}** when your current wallet balance is **${current_bal}**.", ephemeral=True)
+        await interaction.followup.send(f"❌ Rejected! You cannot bet **${bet:,}** when your current wallet balance is **${current_bal:,}**.", ephemeral=True)
         return
+
     suits = ['♠️', '♥️', '♦️', '♣️']
     ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
     deck = [f"{rank}{suit}" for rank in ranks for suit in suits]
     random.shuffle(deck)
     player_hand = [deck.pop(), deck.pop()]
     dealer_hand = [deck.pop(), deck.pop()]
+
     view = BlackjackView(user_id, deck, player_hand, dealer_hand, bet)
     player_score = view.calculate_score(player_hand)
     embed = discord.Embed(title="🃏 Blackjack Casino Table", color=discord.Color.blue())
     embed.add_field(name="Your Hand", value=f"{player_hand[0]}, {player_hand[1]} (Score: {player_score})", inline=False)
     embed.add_field(name="Dealer Hand", value=f"{dealer_hand[0]}, [Hidden]", inline=False)
-    embed.set_footer(text=f"Wagered Bet: ${bet} | Wallet Account: ${current_bal}")
+    embed.set_footer(text=f"Wagered Bet: ${bet:,} | Wallet Account: ${current_bal:,}")
     await interaction.followup.send(embed=embed, view=view)
 
 
@@ -955,28 +1007,31 @@ async def coinflip_cmd(interaction: discord.Interaction, bet: int):
         await interaction.response.send_message("❌ The bet must be greater than 0.", ephemeral=True)
         return
     if bet > current_bal:
-        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal}**", ephemeral=True)
+        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal:,}**", ephemeral=True)
         return
-        
+
     embed = discord.Embed(title="🪙 Interactive Coin Flip Station", description="Predict the outcome below! Use the buttons to bet Heads or Tails.", color=discord.Color.gold())
     embed.add_field(name="Active Stake Wager", value=f"**${bet:,}**", inline=True)
     embed.add_field(name="Wallet Account", value=f"${current_bal:,}", inline=True)
     embed.set_image(url=IMG_COIN_FLIP)
-    
-    view = discord.ui.View(timeout=45)
-    async def make_click(choice_val):
-        async def _cb(i: discord.Interaction):
-            handler = CoinFlipView(user_id, bet)
-            await handler.process_flip(i, choice_val)
-        return _cb
+
+    # FIX: Use a proper View subclass with interaction_check instead of inline closures
+    view = CoinFlipView(user_id, bet)
 
     btn_heads = discord.ui.Button(label="Heads 🦅", style=discord.ButtonStyle.blurple)
-    btn_heads.callback = await make_click("heads")
+    async def heads_cb(i: discord.Interaction):
+        await CoinFlipView(user_id, bet).process_flip(i, "heads")
+    btn_heads.callback = heads_cb
+
     btn_tails = discord.ui.Button(label="Tails 🪙", style=discord.ButtonStyle.secondary)
-    btn_tails.callback = await make_click("tails")
-    
+    async def tails_cb(i: discord.Interaction):
+        await CoinFlipView(user_id, bet).process_flip(i, "tails")
+    btn_tails.callback = tails_cb
+
+    view.clear_items()
     view.add_item(btn_heads)
     view.add_item(btn_tails)
+
     await interaction.response.send_message(embed=embed, view=view)
 
 
@@ -989,16 +1044,16 @@ async def slots_cmd(interaction: discord.Interaction, bet: int):
         await interaction.response.send_message("❌ The bet must be greater than 0.", ephemeral=True)
         return
     if bet > current_bal:
-        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal}**", ephemeral=True)
+        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal:,}**", ephemeral=True)
         return
-        
+
     await interaction.response.defer()
     update_balance(user_id, -bet)
-    
+
     reels = spin_slots()
     payout, combo_name = get_slot_payout(reels, bet)
     reels_display = " | ".join(reels)
-    
+
     if payout > 0:
         update_balance(user_id, payout)
         increment_stats(user_id, "wins")
@@ -1015,7 +1070,7 @@ async def slots_cmd(interaction: discord.Interaction, bet: int):
     embed.add_field(name="Combination", value=combo_name, inline=True)
     embed.add_field(name="Vault Wallet", value=f"${new_bal:,}", inline=False)
     embed.set_image(url=IMG_SLOTS)
-    
+
     view = SlotsReplayView(user_id, bet)
     await interaction.followup.send(embed=embed, view=view)
 
@@ -1029,9 +1084,9 @@ async def roulette_cmd(interaction: discord.Interaction, bet: int):
         await interaction.response.send_message("❌ The bet must be greater than 0.", ephemeral=True)
         return
     if bet > current_bal:
-        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal}**", ephemeral=True)
+        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal:,}**", ephemeral=True)
         return
-        
+
     view = RouletteView(user_id, bet)
     embed = discord.Embed(title="🎡 High-Fidelity Roulette Wheel", description="Place your chips by clicking one of the market type buttons below!", color=discord.Color.gold())
     embed.add_field(name="Wager Stake", value=f"**${bet:,}**", inline=True)
@@ -1049,9 +1104,9 @@ async def horse_racing_cmd(interaction: discord.Interaction, bet: int):
         await interaction.response.send_message("❌ The bet must be greater than 0.", ephemeral=True)
         return
     if bet > current_bal:
-        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal}**", ephemeral=True)
+        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal:,}**", ephemeral=True)
         return
-        
+
     view = HorseRacingView(user_id, bet)
     embed = discord.Embed(title="🐎 Live Turf Derby Track", description="Review the line odds and choose your winning runner using the panel buttons below!", color=discord.Color.gold())
     embed.set_image(url=IMG_HORSE_RACING)
