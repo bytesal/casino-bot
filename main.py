@@ -114,80 +114,177 @@ def get_slot_payout(reels, bet):
     return 0, "No Combination 😔"
 
 # ===================== INTERACTIVE SHOP COMPONENTS =====================
+
+# Threshold: purchases AT OR ABOVE this price require confirmation
+CONFIRMATION_PRICE_THRESHOLD = 50_000
+
+async def execute_shop_purchase(interaction: discord.Interaction, user, guild, item_id: str):
+    """Shared logic that finalizes a shop purchase after all checks pass."""
+    item = SHOP_ITEMS[item_id]
+
+    role = discord.utils.get(guild.roles, name=item["name"])
+    if not role:
+        try:
+            role = await guild.create_role(
+                name=item["name"],
+                color=item["color"],
+                reason="Automatic dynamic creation via Casino Interactive Shop"
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ Bot Configuration Error! The bot is missing `Manage Roles` permission to create this role.",
+                ephemeral=True
+            )
+            return
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error generating server role: {e}", ephemeral=True)
+            return
+
+    if role in user.roles:
+        await interaction.followup.send(
+            f"⚠️ You already own the **{item['name']}** role!",
+            ephemeral=True
+        )
+        return
+
+    try:
+        await user.add_roles(role)
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "❌ Hierarchy Permission Exception! This role is above the bot's management tier.",
+            ephemeral=True
+        )
+        return
+
+    update_balance(user.id, -item["price"])
+    new_bal = get_balance(user.id)
+
+    embed = discord.Embed(title="🛍️ Purchase Successful!", color=discord.Color.green())
+    embed.description = f"Congratulations {user.mention}! You unlocked **{item['name']}**!"
+    embed.add_field(name="Amount Charged", value=f"-${item['price']:,}", inline=True)
+    embed.add_field(name="Remaining Balance", value=f"${new_bal:,}", inline=True)
+    embed.set_footer(text="Vanity badge profile upgrade complete ✨")
+    await interaction.followup.send(embed=embed, ephemeral=False)
+
+
+class ShopConfirmView(discord.ui.View):
+    """Confirmation dialog shown for expensive purchases."""
+    def __init__(self, buyer_id: int, item_id: str):
+        super().__init__(timeout=30)
+        self.buyer_id  = buyer_id
+        self.item_id   = item_id
+        self.resolved  = False
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.buyer_id:
+            await interaction.response.send_message("❌ This confirmation belongs to another user!", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        # Disable buttons silently when time runs out
+        for item in self.children:
+            item.disabled = True
+
+    @discord.ui.button(label="Confirm Purchase ✅", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.resolved:
+            await interaction.response.send_message("⚠️ This confirmation has already been used.", ephemeral=True)
+            return
+        self.resolved = True
+        self.stop()
+        await interaction.response.defer(ephemeral=True)
+        await execute_shop_purchase(interaction, interaction.user, interaction.guild, self.item_id)
+
+    @discord.ui.button(label="Cancel ❌", style=discord.ButtonStyle.danger)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.resolved = True
+        self.stop()
+        item = SHOP_ITEMS[self.item_id]
+        embed = discord.Embed(title="🚫 Purchase Cancelled", color=discord.Color.red())
+        embed.description = f"Transaction for **{item['name']}** was cancelled. Your funds are safe."
+        embed.set_footer(text="You can re-open the shop any time with /shop")
+        await interaction.response.edit_message(embed=embed, view=None)
+
+
 class ShopDropdown(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label=info["name"], value=item_id, description=f"${info['price']:,} — {info['desc']}")
+            discord.SelectOption(
+                label=info["name"],
+                value=item_id,
+                description=f"${info['price']:,} — {info['desc']}"
+            )
             for item_id, info in SHOP_ITEMS.items()
         ]
-        super().__init__(placeholder="Select a premium role to purchase... 🛍️", min_values=1, max_values=1, options=options)
+        super().__init__(
+            placeholder="Select a premium role to purchase... 🛍️",
+            min_values=1, max_values=1,
+            options=options
+        )
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        user = interaction.user
+        user  = interaction.user
         guild = interaction.guild
 
-        user_data = get_user_data(user.id)
-        debt_role = discord.utils.get(guild.roles, name="Debtor 🔴")
+        # ── Debt check ──────────────────────────────────────────────────────
+        user_data  = get_user_data(user.id)
+        debt_role  = discord.utils.get(guild.roles, name="Debtor 🔴")
         if user_data.get("loan_owed", 0) > 0 or (debt_role and debt_role in user.roles):
             await interaction.followup.send(
-                f"❌ Transaction Blocked! You have an active unpaid loan debt of **${user_data.get('loan_owed', 0):,}**. Please fulfill your financial obligations via `/pay_loan` first!",
+                f"❌ Transaction Blocked! You have an active loan of **${user_data.get('loan_owed', 0):,}**. "
+                f"Settle it via `/pay_loan` first.",
                 ephemeral=True
             )
             return
 
-        item_id = self.values[0]
-        item = SHOP_ITEMS[item_id]
-
+        item_id     = self.values[0]
+        item        = SHOP_ITEMS[item_id]
         current_bal = get_balance(user.id)
+
+        # ── Balance check ────────────────────────────────────────────────────
         if current_bal < item["price"]:
             await interaction.followup.send(
-                f"❌ Transaction Denied! You need **${item['price']:,}** to buy **{item['name']}**, but your current balance is only **${current_bal:,}**.",
+                f"❌ Transaction Denied! You need **${item['price']:,}** but only have **${current_bal:,}**.",
                 ephemeral=True
             )
             return
 
-        role = discord.utils.get(guild.roles, name=item["name"])
-        if not role:
-            try:
-                role = await guild.create_role(
-                    name=item["name"],
-                    color=item["color"],
-                    reason="Automatic dynamic creation via Casino Interactive Shop"
-                )
-            except discord.Forbidden:
-                await interaction.followup.send(
-                    "❌ Bot Configuration Error! The bot is missing `Manage Roles` authorization permission to create this role.",
-                    ephemeral=True
-                )
-                return
-            except Exception as e:
-                await interaction.followup.send(f"❌ Structural error generating server role: {e}", ephemeral=True)
-                return
-
-        if role in user.roles:
-            await interaction.followup.send(f"⚠️ Account Note: You already own the premium **{item['name']}** role designation!", ephemeral=True)
-            return
-
-        try:
-            await user.add_roles(role)
-        except discord.Forbidden:
+        # ── Already owns check ───────────────────────────────────────────────
+        existing_role = discord.utils.get(guild.roles, name=item["name"])
+        if existing_role and existing_role in user.roles:
             await interaction.followup.send(
-                "❌ Hierarchy Permission Exception! This role is positioned higher than the bot's current maximum management group tier.",
+                f"⚠️ You already own **{item['name']}**!",
                 ephemeral=True
             )
             return
 
-        update_balance(user.id, -item["price"])
-        new_bal = get_balance(user.id)
+        # ── Confirmation gate for expensive items ────────────────────────────
+        if item["price"] >= CONFIRMATION_PRICE_THRESHOLD:
+            balance_after = current_bal - item["price"]
+            confirm_embed = discord.Embed(
+                title="🏦 Purchase Authorization Required",
+                color=discord.Color.orange()
+            )
+            confirm_embed.description = (
+                f"You are about to make a **high-value transaction**.\n"
+                f"Please review the details carefully before proceeding."
+            )
+            confirm_embed.add_field(name="🛒 Item",             value=f"**{item['name']}**",         inline=True)
+            confirm_embed.add_field(name="💸 Cost",             value=f"**${item['price']:,}**",      inline=True)
+            confirm_embed.add_field(name="💼 Current Balance",  value=f"${current_bal:,}",            inline=True)
+            confirm_embed.add_field(name="💰 Balance After",    value=f"**${balance_after:,}**",      inline=True)
+            confirm_embed.add_field(name="📝 Description",      value=f"*{item['desc']}*",            inline=False)
+            confirm_embed.set_footer(text="⏳ This confirmation expires in 30 seconds.")
 
-        embed = discord.Embed(title="🛍️ Interactive Shop Purchase Successful!", color=discord.Color.green())
-        embed.description = f"Congratulations {user.mention}! You have successfully purchased and unlocked the **{item['name']}** role directly from the menu!"
-        embed.add_field(name="Amount Charged", value=f"-${item['price']:,}", inline=True)
-        embed.add_field(name="Remaining Funds Wallet", value=f"${new_bal:,}", inline=True)
-        embed.set_footer(text="Vanity badge profile upgrade complete ✨")
+            view = ShopConfirmView(buyer_id=user.id, item_id=item_id)
+            await interaction.followup.send(embed=confirm_embed, view=view, ephemeral=True)
+            return
 
-        await interaction.followup.send(embed=embed, ephemeral=False)
+        # ── Cheap items: purchase immediately ────────────────────────────────
+        await execute_shop_purchase(interaction, user, guild, item_id)
+
 
 class ShopDropdownView(discord.ui.View):
     def __init__(self):
@@ -797,24 +894,131 @@ async def leaderboard(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 
-@client.tree.command(name="stats", description="Look up full win/loss records and system analytics for a user")
+# ===================== LUXURY PROFILE CARD SYSTEM =====================
+def build_progress_bar(value: float, total: float, length: int = 12) -> str:
+    """Builds a colored emoji progress bar. value/total = fill ratio."""
+    if total == 0:
+        filled = 0
+    else:
+        filled = round((value / total) * length)
+    filled = max(0, min(length, filled))
+    empty = length - filled
+    return "🟩" * filled + "⬛" * empty
+
+def get_player_title(balance: int, win_rate: float, total_games: int) -> str:
+    """Returns a prestige title based on wealth + performance."""
+    if balance >= 5_000_000:
+        return "👑 Casino Overlord"
+    elif balance >= 1_000_000:
+        return "💎 Server Elite"
+    elif balance >= 500_000:
+        return "🏆 High Roller Legend"
+    elif balance >= 250_000:
+        return "🦈 Card Shark"
+    elif balance >= 100_000:
+        return "✨ Casino VIP"
+    elif balance >= 25_000:
+        return "💰 Wealthy Gambler"
+    elif balance >= 5_000:
+        return "🎲 Active Player"
+    elif total_games == 0:
+        return "🆕 Newcomer"
+    else:
+        return "🃏 Casual Visitor"
+
+def get_streak_badge(win_rate: float, total_games: int) -> str:
+    """Returns a performance badge based on win rate."""
+    if total_games < 5:
+        return "📊 Not Enough Data"
+    elif win_rate >= 75:
+        return "🔥 On Fire"
+    elif win_rate >= 60:
+        return "⚡ Hot Streak"
+    elif win_rate >= 50:
+        return "✅ Profitable"
+    elif win_rate >= 35:
+        return "📉 Struggling"
+    else:
+        return "💀 House Always Wins"
+
+def get_wealth_tier_color(balance: int) -> discord.Color:
+    if balance >= 1_000_000:
+        return discord.Color.gold()
+    elif balance >= 100_000:
+        return discord.Color.purple()
+    elif balance >= 25_000:
+        return discord.Color.teal()
+    elif balance >= 5_000:
+        return discord.Color.blue()
+    else:
+        return discord.Color.greyple()
+
+
+@client.tree.command(name="stats", description="View your luxury casino profile card with full performance analytics")
 @app_commands.describe(user="The target member to view records for (Defaults to yourself)")
 async def stats_command(interaction: discord.Interaction, user: discord.User = None):
     target_user = user or interaction.user
     user_data = get_user_data(target_user.id)
 
-    wins = user_data.get("wins", 0)
-    losses = user_data.get("losses", 0)
+    wins      = user_data.get("wins", 0)
+    losses    = user_data.get("losses", 0)
+    balance   = user_data.get("balance", 0)
+    loan_owed = user_data.get("loan_owed", 0)
     total_games = wins + losses
-    win_rate = (wins / total_games * 100) if total_games > 0 else 0.0
+    win_rate    = (wins / total_games * 100) if total_games > 0 else 0.0
 
-    embed = discord.Embed(title=f"📊 Analytics Summary - {target_user.display_name}", color=discord.Color.blue())
+    # Build components
+    player_title  = get_player_title(balance, win_rate, total_games)
+    streak_badge  = get_streak_badge(win_rate, total_games)
+    card_color    = get_wealth_tier_color(balance)
+
+    win_bar  = build_progress_bar(wins,   total_games)
+    loss_bar = build_progress_bar(losses, total_games)
+
+    # Rank on leaderboard
+    rank_pos = balances_col.count_documents({"balance": {"$gt": balance}}) + 1
+
+    embed = discord.Embed(color=card_color)
+    embed.set_author(
+        name=f"{target_user.display_name}  ·  {player_title}",
+        icon_url=target_user.display_avatar.url
+    )
     embed.set_thumbnail(url=target_user.display_avatar.url)
-    embed.add_field(name="Current Balance", value=f"${user_data.get('balance', 0):,}", inline=False)
-    embed.add_field(name="Total Wins 🎉", value=f"{wins} match(es)", inline=True)
-    embed.add_field(name="Total Losses ❌", value=f"{losses} match(es)", inline=True)
-    embed.add_field(name="Win Rate Percentage", value=f"**{win_rate:.1f}%**", inline=True)
-    embed.set_footer(text="Analytics tracking engine active 🛡️")
+
+    # Wealth section
+    debt_warning = f"\n> ⚠️ Active Debt: **${loan_owed:,}**" if loan_owed > 0 else ""
+    embed.add_field(
+        name="━━━━━━  💼 WALLET  ━━━━━━",
+        value=(
+            f"> 💵 **Balance:** `${balance:,}`{debt_warning}\n"
+            f"> 🏅 **Server Rank:** `#{rank_pos}`"
+        ),
+        inline=False
+    )
+
+    # Performance section
+    embed.add_field(
+        name="━━━━━━  📊 PERFORMANCE  ━━━━━━",
+        value=(
+            f"> 🎮 **Total Games:** `{total_games}`\n"
+            f"> 🎉 **Wins:** `{wins}`  {streak_badge}\n"
+            f"> ❌ **Losses:** `{losses}`\n"
+            f"> 📈 **Win Rate:** `{win_rate:.1f}%`"
+        ),
+        inline=False
+    )
+
+    # Progress bars section
+    embed.add_field(
+        name="━━━━━━  📉 WIN / LOSS RATIO  ━━━━━━",
+        value=(
+            f"> 🟩 Wins    `{win_rate:5.1f}%`  {win_bar}\n"
+            f"> ⬛ Losses  `{100 - win_rate:5.1f}%`  {loss_bar}"
+        ),
+        inline=False
+    )
+
+    embed.set_footer(text=f"Casino Profile Card  •  {target_user.id}")
     await interaction.response.send_message(embed=embed)
 
 
