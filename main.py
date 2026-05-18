@@ -23,7 +23,8 @@ def get_user_data(user_id):
             "balance": 1000, 
             "wins": 0, 
             "losses": 0,
-            "last_daily": None
+            "last_daily": None,
+            "loan_owed": 0
         }
         balances_col.insert_one(default_data)
         return default_data
@@ -37,6 +38,9 @@ def get_user_data(user_id):
         updated = True
     if "last_daily" not in user_data:
         user_data["last_daily"] = None
+        updated = True
+    if "loan_owed" not in user_data:
+        user_data["loan_owed"] = 0
         updated = True
         
     if updated:
@@ -57,7 +61,7 @@ def increment_stats(user_id, stat_type):
     get_user_data(user_id)
     balances_col.update_one({"user_id": user_id}, {"$inc": {stat_type: 1}})
 
-# ===================== CASINO SHOP CONFIGURATION =====================
+# ===================== CASINO CONFIGURATION =====================
 SHOP_ITEMS = {
     "item_1": {"name": "Gambler 🎲", "price": 5000, "color": discord.Color.blue(), "desc": "Starter casino badge for active players."},
     "item_2": {"name": "High Roller 💰", "price": 25000, "color": discord.Color.green(), "desc": "Premium badge for deep-pocket wagerers."},
@@ -67,6 +71,25 @@ SHOP_ITEMS = {
     "item_6": {"name": "The Casino Boss 🏰", "price": 5000000, "color": discord.Color.dark_red(), "desc": "The ultimate luxury crown of system ownership."}
 }
 
+LOAN_LIMITS = [
+    {"role": "The Casino Boss 🏰", "max_loan": 10000000, "interest": 0.03},
+    {"role": "Millionaire 👑", "max_loan": 2000000, "interest": 0.05},
+    {"role": "Card Shark 🦈", "max_loan": 500000, "interest": 0.06},
+    {"role": "Casino VIP ✨", "max_loan": 200000, "interest": 0.08},
+    {"role": "High Roller 💰", "max_loan": 50000, "interest": 0.10},
+    {"role": "Gambler 🎲", "max_loan": 10000, "interest": 0.12},
+]
+DEFAULT_LOAN_LIMIT = 2000
+DEFAULT_INTEREST = 0.15
+
+def get_user_loan_tier(member):
+    user_roles = [role.name for role in member.roles]
+    for tier in LOAN_LIMITS:
+        if tier["role"] in user_roles:
+            return tier["max_loan"], tier["interest"], tier["role"]
+    return DEFAULT_LOAN_LIMIT, DEFAULT_INTEREST, "Default Player"
+
+# ===================== INTERACTIVE SHOP COMPONENTS =====================
 class ShopDropdown(discord.ui.Select):
     def __init__(self):
         options = [
@@ -79,6 +102,17 @@ class ShopDropdown(discord.ui.Select):
         await interaction.response.defer(ephemeral=True)
         user = interaction.user
         guild = interaction.guild
+        
+        # Anti-exploit check for active debt restriction
+        user_data = get_user_data(user.id)
+        debt_role = discord.utils.get(guild.roles, name="Debtor 🔴")
+        if user_data.get("loan_owed", 0) > 0 or (debt_role and debt_role in user.roles):
+            await interaction.followup.send(
+                f"❌ Transaction Blocked! You have an active unpaid loan debt of **${user_data.get('loan_owed', 0):,}**. Please fulfill your financial obligations via `/pay_loan` first!",
+                ephemeral=True
+            )
+            return
+
         item_id = self.values[0]
         item = SHOP_ITEMS[item_id]
         
@@ -633,13 +667,15 @@ async def help_command(interaction: discord.Interaction):
         inline=False
     )
     embed.add_field(
-        name="💰 Server Economy & Shop",
+        name="💰 Server Economy & Debt System",
         value=(
             "`/balance` - Check your wallet data.\n"
             "`/daily` - Collect your 24-hour bonus salary reward.\n"
             "`/leaderboard` - Review the wealthiest system users.\n"
             "`/stats [user]` - Look up casino play analytics & performance metrics.\n"
             "`/shop` - Open the interactive premium luxury roles store menu.\n"
+            "`/borrow [amount]` - Request a temporary loan backed by your highest tier role.\n"
+            "`/pay_loan` - Settle your outstanding debts and unfreeze your profile permissions.\n"
         ),
         inline=False
     )
@@ -771,6 +807,108 @@ async def shop_command(interaction: discord.Interaction):
     embed.set_footer(text="Roles are created automatically on purchase if missing.")
     view = ShopDropdownView()
     await interaction.response.send_message(embed=embed, view=view)
+
+
+@client.tree.command(name="borrow", description="Request a financial vault loan backed by your current server role credentials")
+@app_commands.describe(amount="The size of the virtual funds cash you wish to borrow")
+async def borrow_command(interaction: discord.Interaction, amount: int):
+    await interaction.response.defer(ephemeral=True)
+    user = interaction.user
+    guild = interaction.guild
+    
+    user_data = get_user_data(user.id)
+    if user_data.get("loan_owed", 0) > 0:
+        await interaction.followup.send(
+            f"❌ Application Denied! You already have an outstanding active loan balance of **${user_data['loan_owed']:,}** which must be settled.",
+            ephemeral=True
+        )
+        return
+        
+    if amount < 100:
+        await interaction.followup.send("❌ Minimum required borrowing amount size is **$100**.", ephemeral=True)
+        return
+        
+    max_loan, interest_rate, tier_name = get_user_loan_tier(user)
+    if amount > max_loan:
+        await interaction.followup.send(
+            f"❌ Credit Limit Exceeded! Based on your tier (**{tier_name}**), your maximum absolute borrow limit is **${max_loan:,}**.",
+            ephemeral=True
+        )
+        return
+
+    # Process and apply debtor role tag
+    debt_role = discord.utils.get(guild.roles, name="Debtor 🔴")
+    if not debt_role:
+        try:
+            debt_role = await guild.create_role(
+                name="Debtor 🔴", 
+                color=discord.Color.red(), 
+                reason="Automatic creation of system Debtor group"
+            )
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Configuration Error: Bot lacks `Manage Roles` authorization.", ephemeral=True)
+            return
+
+    try:
+        await user.add_roles(debt_role)
+    except discord.Forbidden:
+        await interaction.followup.send("❌ Error applying Debtor tag restriction. Check hierarchy levels.", ephemeral=True)
+        return
+
+    total_debt = int(amount * (1 + interest_rate))
+    balances_col.update_one({"user_id": user.id}, {"$set": {"loan_owed": total_debt}})
+    update_balance(user.id, amount)
+    
+    embed = discord.Embed(title="🏦 Casino Vault Loan Approved!", color=discord.Color.orange())
+    embed.description = f"Your requested cash allowance has been dispatched to your balance vault."
+    embed.add_field(name="Principal Funded", value=f"${amount:,}", inline=True)
+    embed.add_field(name="Interest Rate Applied", value=f"{interest_rate * 100:.0f}% ({tier_name})", inline=True)
+    embed.add_field(name="Total Owed Repayment", value=f"**${total_debt:,}**", inline=False)
+    embed.set_footer(text="Profile shop operations frozen until debt settlement via /pay_loan.")
+    
+    await interaction.followup.send(embed=embed, ephemeral=False)
+
+
+@client.tree.command(name="pay_loan", description="Settle your outstanding system debt balances completely to unfreeze shop privileges")
+async def pay_loan_command(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    user = interaction.user
+    guild = interaction.guild
+    
+    user_data = get_user_data(user.id)
+    owed = user_data.get("loan_owed", 0)
+    
+    if owed <= 0:
+        await interaction.followup.send("❌ Account Status: Your profile does not hold any active unpaid debt values.", ephemeral=True)
+        return
+        
+    current_bal = get_balance(user.id)
+    if current_bal < owed:
+        await interaction.followup.send(
+            f"❌ Settlement Failure! Your total debt is **${owed:,}**, but you only hold **${current_bal:,}** in your bank wallet.",
+            ephemeral=True
+        )
+        return
+
+    # Clear financial variables and revoke debtor role
+    update_balance(user.id, -owed)
+    balances_col.update_one({"user_id": user.id}, {"$set": {"loan_owed": 0}})
+    
+    debt_role = discord.utils.get(guild.roles, name="Debtor 🔴")
+    if debt_role and debt_role in user.roles:
+        try:
+            await user.remove_roles(debt_role)
+        except discord.Forbidden:
+            pass
+
+    new_bal = get_balance(user.id)
+    embed = discord.Embed(title="🎉 Financial Debt Settled Completely!", color=discord.Color.green())
+    embed.description = f"Thank you for fulfilling your casino loan obligations, {user.mention}."
+    embed.add_field(name="Amount Paid", value=f"${owed:,}", inline=True)
+    embed.add_field(name="Remaining Funds Wallet", value=f"${new_bal:,}", inline=True)
+    embed.set_footer(text="Your account profiles limitations have been fully removed.")
+    
+    await interaction.followup.send(embed=embed, ephemeral=False)
 
 
 @client.tree.command(name="manage_money", description="Developer Administrative Command: Adjust or deduct user virtual balance")
