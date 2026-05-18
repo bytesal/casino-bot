@@ -452,10 +452,18 @@ client = BlackjackBot()
 async def on_ready():
     print(f"Logged in as {client.user.name}!")
     try:
+        # Set the custom rich presence activity on startup
+        custom_activity = discord.Activity(
+            type=discord.ActivityType.playing, 
+            name="/help | Managing Casino"
+        )
+        await client.change_presence(activity=custom_activity)
+        print("Bot activity status configured successfully.")
+        
         synced = await client.tree.sync()
         print(f"Synced {len(synced)} command(s).")
     except Exception as e:
-        print(f"Failed to sync: {e}")
+        print(f"Failed to sync or set presence: {e}")
 
 
 @client.tree.error
