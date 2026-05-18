@@ -7,6 +7,7 @@ import asyncio
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 from pymongo import MongoClient
+from datetime import datetime, timedelta
 
 # ===================== MongoDB =====================
 MONGO_URI = "mongodb+srv://salehnakkar_db_user:QqUIaSkMryHShmbY@cluster0.j8uynar.mongodb.net/?appName=Cluster0"
@@ -14,18 +15,49 @@ mongo_client = MongoClient(MONGO_URI)
 db = mongo_client["blackjack_db"]
 balances_col = db["user_balances"]
 
-def get_balance(user_id):
+def get_user_data(user_id):
     user_data = balances_col.find_one({"user_id": user_id})
     if not user_data:
-        balances_col.insert_one({"user_id": user_id, "balance": 1000})
-        return 1000
-    return user_data["balance"]
+        default_data = {
+            "user_id": user_id, 
+            "balance": 1000, 
+            "wins": 0, 
+            "losses": 0,
+            "last_daily": None
+        }
+        balances_col.insert_one(default_data)
+        return default_data
+    
+    # Ensure missing keys exist for backward compatibility
+    updated = False
+    if "wins" not in user_data:
+        user_data["wins"] = 0
+        updated = True
+    if "losses" not in user_data:
+        user_data["losses"] = 0
+        updated = True
+    if "last_daily" not in user_data:
+        user_data["last_daily"] = None
+        updated = True
+        
+    if updated:
+        balances_col.update_one({"user_id": user_id}, {"$set": user_data})
+        
+    return user_data
+
+def get_balance(user_id):
+    return get_user_data(user_id)["balance"]
 
 def update_balance(user_id, amount):
-    current_bal = get_balance(user_id)
-    new_bal = max(0, current_bal + amount)
+    current_data = get_user_data(user_id)
+    new_bal = max(0, current_data["balance"] + amount)
     balances_col.update_one({"user_id": user_id}, {"$set": {"balance": new_bal}}, upsert=True)
     return new_bal
+
+def increment_stats(user_id, stat_type):
+    # stat_type can be "wins" or "losses"
+    get_user_data(user_id) # Init if not exists
+    balances_col.update_one({"user_id": user_id}, {"$inc": {stat_type: 1}})
 
 # ===================== BLACKJACK =====================
 class BlackjackView(discord.ui.View):
@@ -77,6 +109,7 @@ class BlackjackView(discord.ui.View):
             player_score = self.calculate_score(self.player_hand)
             if player_score > 21:
                 update_balance(self.player_id, -self.bet)
+                increment_stats(self.player_id, "losses")
                 new_bal = get_balance(self.player_id)
                 embed = discord.Embed(title="💥 Blackjack - Busted!", color=discord.Color.red())
                 embed.add_field(name="Your Hand", value=f"{self.get_hand_string(self.player_hand)} (Score: {player_score})", inline=False)
@@ -107,6 +140,7 @@ class BlackjackView(discord.ui.View):
             player_score = self.calculate_score(self.player_hand)
             if player_score > 21:
                 update_balance(self.player_id, -self.bet)
+                increment_stats(self.player_id, "losses")
                 new_bal = get_balance(self.player_id)
                 embed = discord.Embed(title="💥 Blackjack - Busted on Double!", color=discord.Color.red())
                 embed.add_field(name="Your Hand", value=f"{self.get_hand_string(self.player_hand)} (Score: {player_score})", inline=False)
@@ -120,9 +154,11 @@ class BlackjackView(discord.ui.View):
                 dealer_score = self.calculate_score(self.dealer_hand)
             if dealer_score > 21 or player_score > dealer_score:
                 update_balance(self.player_id, self.bet)
+                increment_stats(self.player_id, "wins")
                 title, color, res_msg = "You Win! 🎉", discord.Color.green(), f"You won **${self.bet}**!"
             elif player_score < dealer_score:
                 update_balance(self.player_id, -self.bet)
+                increment_stats(self.player_id, "losses")
                 title, color, res_msg = "Dealer Wins! ❌", discord.Color.red(), f"You lost **${self.bet}**!"
             else:
                 title, color, res_msg = "Push! 🤝", discord.Color.gold(), "Your bet was returned."
@@ -147,9 +183,11 @@ class BlackjackView(discord.ui.View):
                 dealer_score = self.calculate_score(self.dealer_hand)
             if dealer_score > 21 or player_score > dealer_score:
                 update_balance(self.player_id, self.bet)
+                increment_stats(self.player_id, "wins")
                 title, color, res_msg = "You Win! 🎉", discord.Color.green(), f"Congratulations! You won **${self.bet}**!"
             elif player_score < dealer_score:
                 update_balance(self.player_id, -self.bet)
+                increment_stats(self.player_id, "losses")
                 title, color, res_msg = "Dealer Wins! ❌", discord.Color.red(), f"You lost **${self.bet}**!"
             else:
                 title, color, res_msg = "Push! 🤝", discord.Color.gold(), "Your bet was returned."
@@ -179,9 +217,11 @@ async def coinflip(interaction: discord.Interaction, bet: int, choice: str):
     won = choice == result
     if won:
         update_balance(user_id, bet)
+        increment_stats(user_id, "wins")
         title, color, res_msg = "🎉 Correct! You Won!", discord.Color.green(), f"You won **${bet}**!"
     else:
         update_balance(user_id, -bet)
+        increment_stats(user_id, "losses")
         title, color, res_msg = "💥 Wrong! You Lost!", discord.Color.red(), f"You lost **${bet}**!"
     new_bal = get_balance(user_id)
     embed = discord.Embed(title=f"🪙 Coin Flip - {title}", color=color)
@@ -233,6 +273,7 @@ async def slots(interaction: discord.Interaction, bet: int):
     reels_display = " | ".join(reels)
     if payout > 0:
         update_balance(user_id, payout)
+        increment_stats(user_id, "wins")
         new_bal = get_balance(user_id)
         embed = discord.Embed(title="🎰 Slot Machine - 🎉 Jackpot!", color=discord.Color.green())
         embed.add_field(name="Result", value=f"🎰 | {reels_display} |", inline=False)
@@ -241,6 +282,7 @@ async def slots(interaction: discord.Interaction, bet: int):
         embed.add_field(name="New Balance", value=f"**${new_bal}**", inline=False)
     else:
         update_balance(user_id, -bet)
+        increment_stats(user_id, "losses")
         new_bal = get_balance(user_id)
         embed = discord.Embed(title="🎰 Slot Machine - Lost!", color=discord.Color.red())
         embed.add_field(name="Result", value=f"🎰 | {reels_display} |", inline=False)
@@ -283,10 +325,12 @@ class RouletteView(discord.ui.View):
 
         if won:
             update_balance(self.player_id, payout)
+            increment_stats(self.player_id, "wins")
             new_bal = get_balance(self.player_id)
             embed = discord.Embed(title="🎡 Roulette - 🎉 You Won!", color=discord.Color.green())
         else:
             update_balance(self.player_id, -self.bet)
+            increment_stats(self.player_id, "losses")
             new_bal = get_balance(self.player_id)
             embed = discord.Embed(title="🎡 Roulette - Lost!", color=discord.Color.red())
 
@@ -327,6 +371,7 @@ async def roulette(interaction: discord.Interaction, bet: int, number: int = Non
         if result == number:
             payout = bet * 35
             update_balance(user_id, payout)
+            increment_stats(user_id, "wins")
             new_bal = get_balance(user_id)
             embed = discord.Embed(title="🎡 Roulette - 🤑 Jackpot!", color=discord.Color.gold())
             embed.add_field(name="Ball Landed On", value=f"{color_emoji} **{result}**", inline=True)
@@ -334,6 +379,7 @@ async def roulette(interaction: discord.Interaction, bet: int, number: int = Non
             embed.add_field(name="New Balance", value=f"**${new_bal}**", inline=False)
         else:
             update_balance(user_id, -bet)
+            increment_stats(user_id, "losses")
             new_bal = get_balance(user_id)
             embed = discord.Embed(title="🎡 Roulette - Lost!", color=discord.Color.red())
             embed.add_field(name="Ball Landed On", value=f"{color_emoji} **{result}**", inline=True)
@@ -393,6 +439,7 @@ class HorseRacingView(discord.ui.View):
             if won:
                 payout = int(self.bet * chosen_horse["odds"])
                 update_balance(self.player_id, payout)
+                increment_stats(self.player_id, "wins")
                 new_bal = get_balance(self.player_id)
                 embed = discord.Embed(title="🐎 Horse Racing - 🎉 Victory!", color=discord.Color.green())
                 embed.add_field(name="Race Standings", value="\n".join(race_display), inline=False)
@@ -401,6 +448,7 @@ class HorseRacingView(discord.ui.View):
                 embed.add_field(name="New Balance", value=f"**${new_bal}**", inline=False)
             else:
                 update_balance(self.player_id, -self.bet)
+                increment_stats(self.player_id, "losses")
                 new_bal = get_balance(self.player_id)
                 embed = discord.Embed(title="🐎 Horse Racing - Defeat!", color=discord.Color.red())
                 embed.add_field(name="Race Standings", value="\n".join(race_display), inline=False)
@@ -452,7 +500,6 @@ client = BlackjackBot()
 async def on_ready():
     print(f"Logged in as {client.user.name}!")
     try:
-        # Set the custom rich presence activity on startup
         custom_activity = discord.Activity(
             type=discord.ActivityType.playing, 
             name="/help | Managing Casino"
@@ -508,8 +555,14 @@ async def help_command(interaction: discord.Interaction):
         inline=False
     )
     embed.add_field(
-        name="💰 Server Economy Commands",
-        value="`/balance` - Check your wallet data.\n`/work` - Complete freelance software tasks every 5 minutes.",
+        name="💰 Server Economy & Stats",
+        value=(
+            "`/balance` - Check your wallet data.\n"
+            "`/work` - Complete freelance software tasks every 5 minutes.\n"
+            "`/daily` - Collect your 24-hour bonus salary reward.\n"
+            "`/leaderboard` - Review the wealthiest system users.\n"
+            "`/stats [user]` - Look up casino play analytics & performance metrics.\n"
+        ),
         inline=False
     )
     embed.add_field(
@@ -551,6 +604,93 @@ async def work(interaction: discord.Interaction):
     new_bal = get_balance(interaction.user.id)
     embed = discord.Embed(title="💼 Freelance Contract Completed!", description=job_message, color=discord.Color.teal())
     embed.set_footer(text=f"Updated Total Balance: ${new_bal}")
+    await interaction.response.send_message(embed=embed)
+
+
+@client.tree.command(name="daily", description="Claim your 24-hour bonus casino reward allowance")
+async def daily_bonus(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    user_data = get_user_data(user_id)
+    now = datetime.utcnow()
+    
+    if user_data.get("last_daily"):
+        last_claimed = user_data["last_daily"]
+        # Compatibility handling if stored as string or datetime object
+        if isinstance(last_claimed, str):
+            last_claimed = datetime.fromisoformat(last_claimed)
+            
+        next_claim = last_claimed + timedelta(days=1)
+        if now < next_claim:
+            time_remaining = next_claim - now
+            hours, remainder = divmod(int(time_remaining.total_seconds()), 3600)
+            minutes, _ = divmod(remainder, 60)
+            await interaction.response.send_message(
+                f"⏳ You have already claimed your daily reward! Please return in **{hours} hours and {minutes} minutes**.", 
+                ephemeral=True
+            )
+            return
+
+    daily_reward = 500
+    balances_col.update_one(
+        {"user_id": user_id}, 
+        {"$set": {"last_daily": now}}
+    )
+    update_balance(user_id, daily_reward)
+    new_bal = get_balance(user_id)
+    
+    embed = discord.Embed(title="🎁 Daily Reward Allowance", color=discord.Color.gold())
+    embed.description = f"Successfully collected your daily grant reward of **${daily_reward}**! 💸"
+    embed.set_footer(text=f"Your current balance is now: ${new_bal}")
+    await interaction.response.send_message(embed=embed)
+
+
+@client.tree.command(name="leaderboard", description="View the global server richest casino player rankings")
+async def leaderboard(interaction: discord.Interaction):
+    await interaction.response.defer()
+    top_users = list(balances_col.find().sort("balance", -1).limit(10))
+    
+    embed = discord.Embed(title="🏆 Casino Wealth Leaderboard", color=discord.Color.gold())
+    description_lines = []
+    
+    medals = ["🥇", "🥈", "🥉"]
+    for idx, u_data in enumerate(top_users):
+        user_id = u_data["user_id"]
+        bal = u_data["balance"]
+        rank_label = medals[idx] if idx < 3 else f"`#{idx + 1}`"
+        
+        try:
+            member = await interaction.guild.fetch_member(user_id)
+            name_display = member.display_name
+        except discord.NotFound:
+            name_display = f"User({user_id})"
+        except Exception:
+            name_display = f"User({user_id})"
+            
+        description_lines.append(f"{rank_label} **{name_display}** — ${bal:,}")
+        
+    embed.description = "\n".join(description_lines) if description_lines else "No users recorded yet."
+    embed.set_footer(text="Keep working and playing to climb to the peak!")
+    await interaction.followup.send(embed=embed)
+
+
+@client.tree.command(name="stats", description="Look up full win/loss records and system analytics for a user")
+@app_commands.describe(user="The target member to view records for (Defaults to yourself)")
+async def stats_command(interaction: discord.Interaction, user: discord.User = None):
+    target_user = user or interaction.user
+    user_data = get_user_data(target_user.id)
+    
+    wins = user_data.get("wins", 0)
+    losses = user_data.get("losses", 0)
+    total_games = wins + losses
+    win_rate = (wins / total_games * 100) if total_games > 0 else 0.0
+    
+    embed = discord.Embed(title=f"📊 Analytics Summary - {target_user.display_name}", color=discord.Color.blue())
+    embed.set_thumbnail(url=target_user.display_avatar.url)
+    embed.add_field(name="Current Balance", value=f"${user_data.get('balance', 0):,}", inline=False)
+    embed.add_field(name="Total Wins 🎉", value=f"{wins} match(es)", inline=True)
+    embed.add_field(name="Total Losses ❌", value=f"{losses} match(es)", inline=True)
+    embed.add_field(name="Win Rate Percentage", value=f"**{win_rate:.1f}%**", inline=True)
+    embed.set_footer(text="Analytics tracking engine active 🛡️")
     await interaction.response.send_message(embed=embed)
 
 
