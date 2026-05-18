@@ -89,6 +89,14 @@ def get_user_loan_tier(member):
             return tier["max_loan"], tier["interest"], tier["role"]
     return DEFAULT_LOAN_LIMIT, DEFAULT_INTEREST, "Default Player"
 
+# IMAGE GRAPHICS COMPONENT ASSETS
+IMG_COIN_FLIP = "https://i.imgur.com/E8W8YfV.png"
+IMG_SLOTS = "https://i.imgur.com/vH6Zz2L.png"
+IMG_ROULETTE = "https://i.imgur.com/Yw4hO3F.png"
+IMG_HORSE_RACING = "https://i.imgur.com/zD1F3k9.png"
+IMG_HEADS_RESULT = "https://i.imgur.com/I9ZunmO.png"
+IMG_TAILS_RESULT = "https://i.imgur.com/vR6BfWl.png"
+
 # ===================== INTERACTIVE SHOP COMPONENTS =====================
 class ShopDropdown(discord.ui.Select):
     def __init__(self):
@@ -313,98 +321,108 @@ class BlackjackView(discord.ui.View):
                 await interaction.response.send_message(f"Error: {e}", ephemeral=True)
 
 
-# ===================== COIN FLIP 🪙 =====================
-async def coinflip(interaction: discord.Interaction, bet: int, choice: str):
-    user_id = interaction.user.id
-    current_bal = get_balance(user_id)
-    if bet < 1:
-        await interaction.response.send_message("❌ The bet must be greater than 0.", ephemeral=True)
-        return
-    if bet > current_bal:
-        await interaction.response.send_message(f"❌ Insufficient funds! Your balance is: **${current_bal}**", ephemeral=True)
-        return
-    result = random.choice(["heads", "tails"])
-    result_emoji = "🦅" if result == "heads" else "🪙"
-    won = choice == result
-    if won:
-        update_balance(user_id, bet)
-        increment_stats(user_id, "wins")
-        title, color, res_msg = "🎉 Correct! You Won!", discord.Color.green(), f"You won **${bet}**!"
-    else:
-        update_balance(user_id, -bet)
-        increment_stats(user_id, "losses")
-        title, color, res_msg = "💥 Wrong! You Lost!", discord.Color.red(), f"You lost **${bet}**!"
-    new_bal = get_balance(user_id)
-    embed = discord.Embed(title=f"🪙 Coin Flip - {title}", color=color)
-    embed.add_field(name="Your Choice", value=choice.capitalize(), inline=True)
-    embed.add_field(name="Result", value=f"{result_emoji} {result.capitalize()}", inline=True)
-    embed.add_field(name="Outcome", value=f"{res_msg} Your new balance is **${new_bal}**", inline=False)
-    await interaction.response.send_message(embed=embed)
+# ===================== COIN FLIP INTERACTIVE 🪙 =====================
+class CoinFlipView(discord.ui.View):
+    def __init__(self, player_id, bet):
+        super().__init__(timeout=45)
+        self.player_id = player_id
+        self.bet = bet
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.player_id:
+            await interaction.response.send_message("❌ This flip setup belongs to another user!", ephemeral=True)
+            return False
+        return True
+
+    async def process_flip(self, interaction: discord.Interaction, choice: str):
+        current_bal = get_balance(self.player_id)
+        if self.bet > current_bal:
+            await interaction.response.send_message("❌ Balance too low to re-flip this bet size!", ephemeral=True)
+            return
+
+        result = random.choice(["heads", "tails"])
+        won = choice == result
+        res_img = IMG_HEADS_RESULT if result == "heads" else IMG_TAILS_RESULT
+        
+        if won:
+            update_balance(self.player_id, self.bet)
+            increment_stats(self.player_id, "wins")
+            title, color, msg = "🎉 Prediction Correct! You Won!", discord.Color.green(), f"Awarded +${self.bet:,}!"
+        else:
+            update_balance(self.player_id, -self.bet)
+            increment_stats(self.player_id, "losses")
+            title, color, msg = "💥 Prediction Failed! You Lost!", discord.Color.red(), f"Deducted -${self.bet:,}!"
+
+        new_bal = get_balance(self.player_id)
+        embed = discord.Embed(title=title, color=color)
+        embed.add_field(name="Your Bet Choice", value=choice.upper(), inline=True)
+        embed.add_field(name="Flip Outcome", value=result.upper(), inline=True)
+        embed.add_field(name="Statement Log", value=f"{msg}\nNew balance: **${new_bal:,}**", inline=False)
+        embed.set_image(url=res_img)
+        
+        # Enable replay button framework views
+        await interaction.response.edit_message(embed=embed, view=CoinFlipReplayView(self.player_id, self.bet, choice))
+
+class CoinFlipReplayView(discord.ui.View):
+    def __init__(self, player_id, bet, choice):
+        super().__init__(timeout=30)
+        self.player_id = player_id
+        self.bet = bet
+        self.choice = choice
+
+    @discord.ui.button(label="Flip Again 🔄", style=discord.ButtonStyle.green)
+    async def flip_again(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.player_id:
+            await interaction.response.send_message("❌ Build your own game panel!", ephemeral=True)
+            return
+        handler = CoinFlipView(self.player_id, self.bet)
+        await handler.process_flip(interaction, self.choice)
 
 
-# ===================== SLOTS 🎰 =====================
-SLOT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇", "⭐", "💎", "7️⃣"]
-SLOT_PAYOUTS = {
-    ("💎", "💎", "💎"): 20,
-    ("7️⃣", "7️⃣", "7️⃣"): 15,
-    ("⭐", "⭐", "⭐"): 10,
-    ("🍇", "🍇", "🍇"): 8,
-    ("🍊", "🍊", "🍊"): 6,
-    ("🍋", "🍋", "🍋"): 4,
-    ("🍒", "🍒", "🍒"): 3,
-}
+# ===================== SLOTS INTERACTIVE 🎰 =====================
+class SlotsReplayView(discord.ui.View):
+    def __init__(self, player_id, bet):
+        super().__init__(timeout=30)
+        self.player_id = player_id
+        self.bet = bet
 
-def spin_slots():
-    weights = [20, 18, 16, 14, 12, 8, 5]
-    return random.choices(SLOT_SYMBOLS, weights=weights, k=3)
+    @discord.ui.button(label="Spin Again 🎰", style=discord.ButtonStyle.blurple)
+    async def spin_again(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.player_id:
+            await interaction.response.send_message("❌ Launch your own machine session!", ephemeral=True)
+            return
+        
+        current_bal = get_balance(self.player_id)
+        if self.bet > current_bal:
+            await interaction.response.send_message("❌ Insufficient vault credits to spin!", ephemeral=True)
+            return
+            
+        await interaction.response.defer()
+        reels = spin_slots()
+        payout, combo_name = get_slot_payout(reels, self.bet)
+        reels_display = " | ".join(reels)
+        
+        if payout > 0:
+            update_balance(self.player_id, payout)
+            increment_stats(self.player_id, "wins")
+            new_bal = get_balance(self.player_id)
+            embed = discord.Embed(title="🎰 Slot Jackpot Triggered!", color=discord.Color.green())
+            embed.add_field(name="Payout Prize", value=f"**+${payout:,}**", inline=True)
+        else:
+            update_balance(self.player_id, -self.bet)
+            increment_stats(self.player_id, "losses")
+            new_bal = get_balance(self.player_id)
+            embed = discord.Embed(title="🎰 Slot Matrix Settled", color=discord.Color.red())
+            embed.add_field(name="Loss Deduction", value=f"**-${self.bet:,}**", inline=True)
 
-def get_slot_payout(reels, bet):
-    combo = tuple(reels)
-    if combo in SLOT_PAYOUTS:
-        return SLOT_PAYOUTS[combo] * bet, f"**Triple {combo[0]}** 🎊"
-    if reels.count("🍒") == 2:
-        return bet, "Double Cherry 🍒🍒"
-    return 0, "No Combination 😔"
-
-async def slots(interaction: discord.Interaction, bet: int):
-    user_id = interaction.user.id
-    current_bal = get_balance(user_id)
-    if bet < 1:
-        await interaction.response.send_message("❌ The bet must be greater than 0.", ephemeral=True)
-        return
-    if bet > current_bal:
-        await interaction.response.send_message(f"❌ Insufficient funds! Your balance is: **${current_bal}**", ephemeral=True)
-        return
-    await interaction.response.defer()
-    spinning_embed = discord.Embed(title="🎰 Slot Machine", description="🎰 | 🔄 🔄 🔄 | Spinning...", color=discord.Color.gold())
-    msg = await interaction.followup.send(embed=spinning_embed)
-    await asyncio.sleep(1.5)
-    reels = spin_slots()
-    payout, combo_name = get_slot_payout(reels, bet)
-    reels_display = " | ".join(reels)
-    if payout > 0:
-        update_balance(user_id, payout)
-        increment_stats(user_id, "wins")
-        new_bal = get_balance(user_id)
-        embed = discord.Embed(title="🎰 Slot Machine - 🎉 Jackpot!", color=discord.Color.green())
-        embed.add_field(name="Result", value=f"🎰 | {reels_display} |", inline=False)
+        embed.description = f"🎰 | **{reels_display}** | 🎰"
         embed.add_field(name="Combination", value=combo_name, inline=True)
-        embed.add_field(name="Payout", value=f"**+${payout}**", inline=True)
-        embed.add_field(name="New Balance", value=f"**${new_bal}**", inline=False)
-    else:
-        update_balance(user_id, -bet)
-        increment_stats(user_id, "losses")
-        new_bal = get_balance(user_id)
-        embed = discord.Embed(title="🎰 Slot Machine - Lost!", color=discord.Color.red())
-        embed.add_field(name="Result", value=f"🎰 | {reels_display} |", inline=False)
-        embed.add_field(name="Combination", value=combo_name, inline=True)
-        embed.add_field(name="Loss", value=f"**-${bet}**", inline=True)
-        embed.add_field(name="New Balance", value=f"**${new_bal}**", inline=False)
-    embed.set_footer(text="💎x20 | 7️⃣x15 | ⭐x10 | 🍇x8 | 🍊x6 | 🍋x4 | 🍒x3 (Multiplied by Bet)")
-    await msg.edit(embed=embed)
+        embed.add_field(name="Vault Wallet", value=f"${new_bal:,}", inline=False)
+        embed.set_image(url=IMG_SLOTS)
+        await interaction.followup.edit_message(message_id=interaction.message.id, embed=embed, view=self)
 
 
-# ===================== ROULETTE 🎡 =====================
+# ===================== ROULETTE INTERACTIVE 🎡 =====================
 ROULETTE_NUMBERS = list(range(0, 37))
 RED_NUMBERS = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
 BLACK_NUMBERS = {2,4,6,8,10,11,13,15,17,20,22,24,26,28,29,31,33,35}
@@ -417,7 +435,7 @@ class RouletteView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.player_id:
-            await interaction.response.send_message("❌ This table is not for you!", ephemeral=True)
+            await interaction.response.send_message("❌ Grab a different seat layout!", ephemeral=True)
             return False
         return True
 
@@ -438,17 +456,18 @@ class RouletteView(discord.ui.View):
             update_balance(self.player_id, payout)
             increment_stats(self.player_id, "wins")
             new_bal = get_balance(self.player_id)
-            embed = discord.Embed(title="🎡 Roulette - 🎉 You Won!", color=discord.Color.green())
+            embed = discord.Embed(title="🎡 Roulette Ring - 🎉 Winners Circle!", color=discord.Color.green())
         else:
             update_balance(self.player_id, -self.bet)
             increment_stats(self.player_id, "losses")
             new_bal = get_balance(self.player_id)
-            embed = discord.Embed(title="🎡 Roulette - Lost!", color=discord.Color.red())
+            embed = discord.Embed(title="🎡 Roulette Ring - House Margin Wins", color=discord.Color.red())
 
-        embed.add_field(name="Ball Landed On", value=f"{color_emoji} **{result}**", inline=True)
-        embed.add_field(name="Your Bet", value=display_name, inline=True)
-        embed.add_field(name="Payout/Loss", value=f"**{'+ ' if won else '- '}${payout if won else self.bet}**", inline=True)
-        embed.add_field(name="New Balance", value=f"**${new_bal}**", inline=False)
+        embed.add_field(name="Ball Position", value=f"{color_emoji} **{result}**", inline=True)
+        embed.add_field(name="Wager Placement", value=display_name, inline=True)
+        embed.add_field(name="Net Result Log", value=f"**{'+ ' if won else '- '}${payout if won else self.bet:,}**", inline=True)
+        embed.add_field(name="Cash Balance Wallet", value=f"**${new_bal:,}**", inline=False)
+        embed.set_image(url=IMG_ROULETTE)
         await interaction.response.edit_message(embed=embed, view=None)
 
     @discord.ui.button(label="🔴 Red (x2)", style=discord.ButtonStyle.danger)
@@ -464,50 +483,8 @@ class RouletteView(discord.ui.View):
     @discord.ui.button(label="19-36 (x2)", style=discord.ButtonStyle.green)
     async def bet_high(self, i, b): await self.resolve(i, "high", "19-36")
 
-async def roulette(interaction: discord.Interaction, bet: int, number: int = None):
-    user_id = interaction.user.id
-    current_bal = get_balance(user_id)
-    if bet < 1:
-        await interaction.response.send_message("❌ The bet must be greater than 0.", ephemeral=True)
-        return
-    if bet > current_bal:
-        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal}**", ephemeral=True)
-        return
-    if number is not None:
-        if not (0 <= number <= 36):
-            await interaction.response.send_message("❌ Number must be between 0 and 36.", ephemeral=True)
-            return
-        result = random.choice(ROULETTE_NUMBERS)
-        color_emoji = "🟢" if result == 0 else ("🔴" if result in RED_NUMBERS else "⚫")
-        if result == number:
-            payout = bet * 35
-            update_balance(user_id, payout)
-            increment_stats(user_id, "wins")
-            new_bal = get_balance(user_id)
-            embed = discord.Embed(title="🎡 Roulette - 🤑 Jackpot!", color=discord.Color.gold())
-            embed.add_field(name="Ball Landed On", value=f"{color_emoji} **{result}**", inline=True)
-            embed.add_field(name="Payout", value=f"**+${payout}** (x35!) 🤑", inline=False)
-            embed.add_field(name="New Balance", value=f"**${new_bal}**", inline=False)
-        else:
-            update_balance(user_id, -bet)
-            increment_stats(user_id, "losses")
-            new_bal = get_balance(user_id)
-            embed = discord.Embed(title="🎡 Roulette - Lost!", color=discord.Color.red())
-            embed.add_field(name="Ball Landed On", value=f"{color_emoji} **{result}**", inline=True)
-            embed.add_field(name="Your Bet", value=f"Number {number}", inline=True)
-            embed.add_field(name="Loss", value=f"**-${bet}**", inline=False)
-            embed.add_field(name="New Balance", value=f"**${new_bal}**", inline=False)
-        await interaction.response.send_message(embed=embed)
-        return
-    view = RouletteView(user_id, bet)
-    embed = discord.Embed(title="🎡 Roulette Table", description="Choose your bet type below! 👇", color=discord.Color.gold())
-    embed.add_field(name="Active Bet", value=f"**${bet}**", inline=True)
-    embed.add_field(name="Your Wallet", value=f"**${current_bal}**", inline=True)
-    embed.set_footer(text="You have 45 seconds to choose!")
-    await interaction.response.send_message(embed=embed, view=view)
 
-
-# ===================== HORSE RACING 🐎 =====================
+# ===================== HORSE RACING INTERACTIVE 🐎 =====================
 HORSES = [
     {"name": "Lightning ⚡", "odds": 2.0},
     {"name": "Blizzard 💨", "odds": 2.5},
@@ -533,7 +510,7 @@ class HorseRacingView(discord.ui.View):
     def _make_callback(self, horse_index):
         async def callback(interaction: discord.Interaction):
             if interaction.user.id != self.player_id:
-                await interaction.response.send_message("❌ This race is not for you!", ephemeral=True)
+                await interaction.response.send_message("❌ Grab alternative racing slip brackets!", ephemeral=True)
                 return
             self.stop()
             chosen_horse = HORSES[horse_index]
@@ -542,49 +519,33 @@ class HorseRacingView(discord.ui.View):
             winner_horse = HORSES[winner_index]
             others = [h for i, h in enumerate(HORSES) if i != winner_index]
             random.shuffle(others)
+            
             race_display = [f"🥇 {winner_horse['name']}"]
             medals = ["🥈", "🥉", "4.", "5."]
             for rank, h in enumerate(others):
                 race_display.append(f"{medals[rank]} {h['name']}")
+                
             won = horse_index == winner_index
             if won:
                 payout = int(self.bet * chosen_horse["odds"])
                 update_balance(self.player_id, payout)
                 increment_stats(self.player_id, "wins")
                 new_bal = get_balance(self.player_id)
-                embed = discord.Embed(title="🐎 Horse Racing - 🎉 Victory!", color=discord.Color.green())
-                embed.add_field(name="Race Standings", value="\n".join(race_display), inline=False)
-                embed.add_field(name="Your Horse", value=chosen_horse["name"], inline=True)
-                embed.add_field(name="Payout", value=f"**+${payout}** (x{chosen_horse['odds']})", inline=True)
-                embed.add_field(name="New Balance", value=f"**${new_bal}**", inline=False)
+                embed = discord.Embed(title="🐎 Turf Track Finish - 🎉 Win Division!", color=discord.Color.green())
+                embed.add_field(name="Payout Earned", value=f"**+${payout:,}**", inline=True)
             else:
                 update_balance(self.player_id, -self.bet)
                 increment_stats(self.player_id, "losses")
                 new_bal = get_balance(self.player_id)
-                embed = discord.Embed(title="🐎 Horse Racing - Defeat!", color=discord.Color.red())
-                embed.add_field(name="Race Standings", value="\n".join(race_display), inline=False)
-                embed.add_field(name="Your Horse", value=chosen_horse["name"], inline=True)
-                embed.add_field(name="Winner", value=winner_horse["name"], inline=True)
-                embed.add_field(name="Loss", value=f"**-${self.bet}**", inline=True)
-                embed.add_field(name="New Balance", value=f"**${new_bal}**", inline=False)
+                embed = discord.Embed(title="🐎 Turf Track Finish - Loss Division", color=discord.Color.red())
+                embed.add_field(name="Loss Charge", value=f"**-${self.bet:,}**", inline=True)
+
+            embed.add_field(name="Official Race Standings", value="\n".join(race_display), inline=False)
+            embed.add_field(name="Your Picked Runner", value=chosen_horse["name"], inline=True)
+            embed.add_field(name="Account Net Balance", value=f"${new_bal:,}", inline=False)
+            embed.set_image(url=IMG_HORSE_RACING)
             await interaction.response.edit_message(embed=embed, view=None)
         return callback
-
-async def horse_racing(interaction: discord.Interaction, bet: int):
-    user_id = interaction.user.id
-    current_bal = get_balance(user_id)
-    if bet < 1:
-        await interaction.response.send_message("❌ The bet must be greater than 0.", ephemeral=True)
-        return
-    if bet > current_bal:
-        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal}**", ephemeral=True)
-        return
-    view = HorseRacingView(user_id, bet)
-    embed = discord.Embed(title="🐎 Derby Horse Racing", description="Choose your winning horse! 👇", color=discord.Color.gold())
-    for horse in HORSES:
-        embed.add_field(name=horse["name"], value=f"Pays x{horse['odds']}", inline=True)
-    embed.set_footer(text=f"Bet: ${bet} | Wallet: ${current_bal} | Time: 45s")
-    await interaction.response.send_message(embed=embed, view=view)
 
 
 # ===================== BOT SETUP & LOOPS =====================
@@ -643,7 +604,6 @@ client = BlackjackBot()
 async def on_ready():
     print(f"Logged in as {client.user.name}!")
     try:
-        # Automated Background Global Sync on System Startup Log
         synced = await client.tree.sync()
         print(f"Global commands automated synchronization completed. Synced {len(synced)} entries.")
     except Exception as e:
@@ -674,10 +634,10 @@ async def help_command(interaction: discord.Interaction):
         name="🎮 Casino Game Commands",
         value=(
             "`/blackjack [bet]` - Play a high-stakes game of Blackjack.\n"
-            "`/coinflip [bet] [choice]` - Flip a virtual coin to double your stakes.\n"
-            "`/slots [bet]` - Spin the classic slot machine.\n"
-            "`/roulette [bet] [number]` - Bet on a color, type, or specific number.\n"
-            "`/horse_racing [bet]` - Wager on server horse derby racing.\n"
+            "`/coinflip [bet]` - Open interactive graphic Coin Flip interface panel.\n"
+            "`/slots [bet]` - Spin the rich asset visual slot machine interface.\n"
+            "`/roulette [bet] [number]` - Bet on a color, type, or specific target number.\n"
+            "`/horse_racing [bet]` - Wager on server horse derby racing boards.\n"
         ),
         inline=False
     )
@@ -694,16 +654,6 @@ async def help_command(interaction: discord.Interaction):
         ),
         inline=False
     )
-    embed.add_field(
-        name="🃏 Blackjack Overview Rules",
-        value="1. Match or get closer to **21** than the dealer without going over.\n2. **Hit**: Take another card.\n3. **Stand**: Hold your hand and pass.\n4. **Double Down**: Double your initial bet, draw exactly one card, and stand.",
-        inline=False
-    )
-    embed.add_field(
-        name="🎰 Slot Machine Multipliers",
-        value="💎x20 | 7️⃣x15 | ⭐x10 | 🍇x8 | 🍊x6 | 🍋x4 | 🍒x3",
-        inline=False
-    )
     embed.set_footer(text="Developed with pure passion 💻")
     await interaction.response.send_message(embed=embed)
 
@@ -713,7 +663,7 @@ async def balance(interaction: discord.Interaction):
     user_bal = get_balance(interaction.user.id)
     embed = discord.Embed(title="💰 Bank Account Statement", color=discord.Color.green())
     embed.add_field(name="Account Holder", value=interaction.user.mention, inline=True)
-    embed.add_field(name="Net Balance", value=f"**${user_bal}**", inline=True)
+    embed.add_field(name="Net Balance", value=f"**${user_bal:,}**", inline=True)
     await interaction.response.send_message(embed=embed)
 
 
@@ -753,7 +703,7 @@ async def daily_bonus(interaction: discord.Interaction):
     
     embed = discord.Embed(title="🎁 Daily Reward Allowance", color=discord.Color.gold())
     embed.description = f"Successfully collected your daily grant reward of **${daily_reward}**! 💸"
-    embed.set_footer(text=f"Your current balance is now: ${new_bal}")
+    embed.set_footer(text=f"Your current balance is now: ${new_bal:,}")
     await interaction.response.send_message(embed=embed)
 
 
@@ -983,32 +933,116 @@ async def blackjack(interaction: discord.Interaction, bet: int):
     await interaction.followup.send(embed=embed, view=view)
 
 
-@client.tree.command(name="coinflip", description="Flip the official casino coin to double your active wager")
-@app_commands.describe(bet="Money amount to bet", choice="Choose Heads or Tails")
-@app_commands.choices(choice=[
-    app_commands.Choice(name="Heads 🦅", value="heads"),
-    app_commands.Choice(name="Tails 🪙", value="tails")
-])
-async def coinflip_cmd(interaction: discord.Interaction, bet: int, choice: str):
-    await coinflip(interaction, bet, choice)
+@client.tree.command(name="coinflip", description="Launch the interactive coin flip station with instant action choices")
+@app_commands.describe(bet="Money amount to bet")
+async def coinflip_cmd(interaction: discord.Interaction, bet: int):
+    user_id = interaction.user.id
+    current_bal = get_balance(user_id)
+    if bet < 1:
+        await interaction.response.send_message("❌ The bet must be greater than 0.", ephemeral=True)
+        return
+    if bet > current_bal:
+        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal}**", ephemeral=True)
+        return
+        
+    embed = discord.Embed(title="🪙 Interactive Coin Flip Station", description="Predict the outcome below! Use the buttons to bet Heads or Tails.", color=discord.Color.gold())
+    embed.add_field(name="Active Stake Wager", value=f"**${bet:,}**", inline=True)
+    embed.add_field(name="Wallet Account", value=f"${current_bal:,}", inline=True)
+    embed.set_image(url=IMG_COIN_FLIP)
+    
+    # Inline custom temporary action layout buttons
+    view = discord.ui.View(timeout=45)
+    async def make_click(choice_val):
+        async def _cb(i: discord.Interaction):
+            handler = CoinFlipView(user_id, bet)
+            await handler.process_flip(i, choice_val)
+        return _cb
+
+    btn_heads = discord.ui.Button(label="Heads 🦅", style=discord.ButtonStyle.blurple)
+    btn_heads.callback = await make_click("heads")
+    btn_tails = discord.ui.Button(label="Tails 🪙", style=discord.ButtonStyle.secondary)
+    btn_tails.callback = await make_click("tails")
+    
+    view.add_item(btn_heads)
+    view.add_item(btn_tails)
+    await interaction.response.send_message(embed=embed, view=view)
 
 
-@client.tree.command(name="slots", description="Pull the handle on the classic diamond virtual slot machine")
+@client.tree.command(name="slots", description="Pull the rich visual handle of the elite slot machine")
 @app_commands.describe(bet="Money amount to spin")
 async def slots_cmd(interaction: discord.Interaction, bet: int):
-    await slots(interaction, bet)
+    user_id = interaction.user.id
+    current_bal = get_balance(user_id)
+    if bet < 1:
+        await interaction.response.send_message("❌ The bet must be greater than 0.", ephemeral=True)
+        return
+    if bet > current_bal:
+        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal}**", ephemeral=True)
+        return
+        
+    await interaction.response.defer()
+    reels = spin_slots()
+    payout, combo_name = get_slot_payout(reels, bet)
+    reels_display = " | ".join(reels)
+    
+    if payout > 0:
+        update_balance(user_id, payout)
+        increment_stats(user_id, "wins")
+        new_bal = get_balance(user_id)
+        embed = discord.Embed(title="🎰 Slot Jackpot Triggered!", color=discord.Color.green())
+        embed.add_field(name="Payout Prize", value=f"**+${payout:,}**", inline=True)
+    else:
+        update_balance(user_id, -bet)
+        increment_stats(user_id, "losses")
+        new_bal = get_balance(user_id)
+        embed = discord.Embed(title="🎰 Slot Matrix Settled", color=discord.Color.red())
+        embed.add_field(name="Loss Deduction", value=f"**-${bet:,}**", inline=True)
+
+    embed.description = f"🎰 | **{reels_display}** | 🎰"
+    embed.add_field(name="Combination", value=combo_name, inline=True)
+    embed.add_field(name="Vault Wallet", value=f"${new_bal:,}", inline=False)
+    embed.set_image(url=IMG_SLOTS)
+    
+    view = SlotsReplayView(user_id, bet)
+    await interaction.followup.send(embed=embed, view=view)
 
 
-@client.tree.command(name="roulette", description="Wager your money on the high-fidelity European roulette wheel")
-@app_commands.describe(bet="Money amount to bet", number="Specific raw number target from 0-36 (Optional, pays x35)")
-async def roulette_cmd(interaction: discord.Interaction, bet: int, number: int = None):
-    await roulette(interaction, bet, number)
+@client.tree.command(name="roulette", description="Wager your assets on the visual European roulette circle grid")
+@app_commands.describe(bet="Money amount to bet")
+async def roulette_cmd(interaction: discord.Interaction, bet: int):
+    user_id = interaction.user.id
+    current_bal = get_balance(user_id)
+    if bet < 1:
+        await interaction.response.send_message("❌ The bet must be greater than 0.", ephemeral=True)
+        return
+    if bet > current_bal:
+        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal}**", ephemeral=True)
+        return
+        
+    view = RouletteView(user_id, bet)
+    embed = discord.Embed(title="🎡 High-Fidelity Roulette Wheel", description="Place your chips by clicking one of the market type buttons below!", color=discord.Color.gold())
+    embed.add_field(name="Wager Stake", value=f"**${bet:,}**", inline=True)
+    embed.add_field(name="Wallet Net", value=f"**${current_bal:,}**", inline=True)
+    embed.set_image(url=IMG_ROULETTE)
+    await interaction.response.send_message(embed=embed, view=view)
 
 
-@client.tree.command(name="horse_racing", description="Place an economic wager on the active server derby race")
+@client.tree.command(name="horse_racing", description="Wager on the live action turf horse race layout boards")
 @app_commands.describe(bet="Money amount to bet")
 async def horse_racing_cmd(interaction: discord.Interaction, bet: int):
-    await horse_racing(interaction, bet)
+    user_id = interaction.user.id
+    current_bal = get_balance(user_id)
+    if bet < 1:
+        await interaction.response.send_message("❌ The bet must be greater than 0.", ephemeral=True)
+        return
+    if bet > current_bal:
+        await interaction.response.send_message(f"❌ Insufficient funds! Balance: **${current_bal}**", ephemeral=True)
+        return
+        
+    view = HorseRacingView(user_id, bet)
+    embed = discord.Embed(title="🐎 Live Turf Derby Track", description="Review the line odds and choose your winning runner using the panel buttons below!", color=discord.Color.gold())
+    embed.set_image(url=IMG_HORSE_RACING)
+    await interaction.response.send_message(embed=embed, view=view)
 
 
 @client.tree.command(name="purge", description="Administrative command to delete a specified amount of channel text messages")
