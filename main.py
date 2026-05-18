@@ -643,10 +643,11 @@ client = BlackjackBot()
 async def on_ready():
     print(f"Logged in as {client.user.name}!")
     try:
+        # Automated Background Global Sync on System Startup Log
         synced = await client.tree.sync()
-        print(f"Synced {len(synced)} command(s) successfully.")
+        print(f"Global commands automated synchronization completed. Synced {len(synced)} entries.")
     except Exception as e:
-        print(f"Failed to sync global trees: {e}")
+        print(f"Failed to execute automated tree sync: {e}")
 
 
 @client.tree.error
@@ -665,16 +666,6 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 
 
 # ---- Commands ----
-
-@client.tree.command(name="sync", description="Secret administrative command to sync application commands globally")
-async def sync(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        synced = await client.tree.sync()
-        await interaction.followup.send(f"Successfully synced {len(synced)} command(s) globally.", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"Failed to sync: {e}", ephemeral=True)
-
 
 @client.tree.command(name="help", description="Display full guidelines and instructions on how to use the casino bot")
 async def help_command(interaction: discord.Interaction):
