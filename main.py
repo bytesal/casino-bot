@@ -28,7 +28,6 @@ def get_user_data(user_id):
         balances_col.insert_one(default_data)
         return default_data
     
-    # Ensure missing keys exist for backward compatibility
     updated = False
     if "wins" not in user_data:
         user_data["wins"] = 0
@@ -55,9 +54,18 @@ def update_balance(user_id, amount):
     return new_bal
 
 def increment_stats(user_id, stat_type):
-    # stat_type can be "wins" or "losses"
-    get_user_data(user_id) # Init if not exists
+    get_user_data(user_id)
     balances_col.update_one({"user_id": user_id}, {"$inc": {stat_type: 1}})
+
+# ===================== CASINO SHOP CONFIGURATION =====================
+SHOP_ITEMS = {
+    1: {"name": "Gambler 🎲", "price": 5000, "color": discord.Color.blue()},
+    2: {"name": "High Roller 💰", "price": 25000, "color": discord.Color.green()},
+    3: {"name": "Casino VIP ✨", "price": 100000, "color": discord.Color.gold()},
+    4: {"name": "Card Shark 🦈", "price": 250000, "color": discord.Color.teal()},
+    5: {"name": "Millionaire 👑", "price": 1000000, "color": discord.Color.purple()},
+    6: {"name": "The Casino Boss 🏰", "price": 5000000, "color": discord.Color.dark_red()}
+}
 
 # ===================== BLACKJACK =====================
 class BlackjackView(discord.ui.View):
@@ -508,7 +516,7 @@ async def on_ready():
         print("Bot activity status configured successfully.")
         
         synced = await client.tree.sync()
-        print(f"Synced {len(synced)} command(s).")
+        print(f"Synced {len(synced)} command(s) successfully.")
     except Exception as e:
         print(f"Failed to sync or set presence: {e}")
 
@@ -555,13 +563,15 @@ async def help_command(interaction: discord.Interaction):
         inline=False
     )
     embed.add_field(
-        name="💰 Server Economy & Stats",
+        name="💰 Server Economy & Shop",
         value=(
             "`/balance` - Check your wallet data.\n"
             "`/work` - Complete freelance software tasks every 5 minutes.\n"
             "`/daily` - Collect your 24-hour bonus salary reward.\n"
             "`/leaderboard` - Review the wealthiest system users.\n"
             "`/stats [user]` - Look up casino play analytics & performance metrics.\n"
+            "`/shop` - View exclusive luxury roles available for purchase.\n"
+            "`/buy [item_id]` - Purchase a premium server role directly.\n"
         ),
         inline=False
     )
@@ -615,20 +625,23 @@ async def daily_bonus(interaction: discord.Interaction):
     
     if user_data.get("last_daily"):
         last_claimed = user_data["last_daily"]
-        # Compatibility handling if stored as string or datetime object
         if isinstance(last_claimed, str):
-            last_claimed = datetime.fromisoformat(last_claimed)
-            
-        next_claim = last_claimed + timedelta(days=1)
-        if now < next_claim:
-            time_remaining = next_claim - now
-            hours, remainder = divmod(int(time_remaining.total_seconds()), 3600)
-            minutes, _ = divmod(remainder, 60)
-            await interaction.response.send_message(
-                f"⏳ You have already claimed your daily reward! Please return in **{hours} hours and {minutes} minutes**.", 
-                ephemeral=True
-            )
-            return
+            try:
+                last_claimed = datetime.fromisoformat(last_claimed)
+            except ValueError:
+                last_claimed = None
+
+        if last_claimed:
+            next_claim = last_claimed + timedelta(days=1)
+            if now < next_claim:
+                time_remaining = next_claim - now
+                hours, remainder = divmod(int(time_remaining.total_seconds()), 3600)
+                minutes, _ = divmod(remainder, 60)
+                await interaction.response.send_message(
+                    f"⏳ You have already claimed your daily reward! Please return in **{hours} hours and {minutes} minutes**.", 
+                    ephemeral=True
+                )
+                return
 
     daily_reward = 500
     balances_col.update_one(
@@ -692,6 +705,87 @@ async def stats_command(interaction: discord.Interaction, user: discord.User = N
     embed.add_field(name="Win Rate Percentage", value=f"**{win_rate:.1f}%**", inline=True)
     embed.set_footer(text="Analytics tracking engine active 🛡️")
     await interaction.response.send_message(embed=embed)
+
+
+@client.tree.command(name="shop", description="Open the premium casino shop to view exclusive collectible luxury roles")
+async def shop_command(interaction: discord.Interaction):
+    embed = discord.Embed(title="💎 Luxury Casino Shop", color=discord.Color.purple())
+    embed.description = "Upgrade your profile status by purchasing high-tier vanity roles! Use `/buy [item_id]` to purchase an item.\n\n"
+    
+    for item_id, info in SHOP_ITEMS.items():
+        embed.add_field(
+            name=f"ID: {item_id} — {info['name']}", 
+            value=f"Price: **${info['price']:,}**", 
+            inline=False
+        )
+        
+    embed.set_footer(text="Note: Roles are created automatically on purchase if missing.")
+    await interaction.response.send_message(embed=embed)
+
+
+@client.tree.command(name="buy", description="Purchase a specific premium luxury role directly from the casino shop")
+@app_commands.describe(item_id="The exact ID number of the shop item you want to buy")
+async def buy_command(interaction: discord.Interaction, item_id: int):
+    if item_id not in SHOP_ITEMS:
+        await interaction.response.send_message("❌ Invalid Item ID! Please review the options using `/shop`.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    user = interaction.user
+    guild = interaction.guild
+    item = SHOP_ITEMS[item_id]
+    
+    current_bal = get_balance(user.id)
+    if current_bal < item["price"]:
+        await interaction.followup.send(
+            f"❌ Transaction Denied! You need **${item['price']:,}** to buy **{item['name']}**, but your current balance is only **${current_bal}**.", 
+            ephemeral=True
+        )
+        return
+
+    # Check if role exists, or automatically build it dynamically
+    role = discord.utils.get(guild.roles, name=item["name"])
+    if not role:
+        try:
+            role = await guild.create_role(
+                name=item["name"], 
+                color=item["color"], 
+                reason="Automatic dynamic creation via Casino Shop Purchase"
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ Bot Configuration Error! The bot is missing `Manage Roles` authorization permission to create this role.", 
+                ephemeral=True
+            )
+            return
+        except Exception as e:
+            await interaction.followup.send(f"❌ Structural error generating server role: {e}", ephemeral=True)
+            return
+
+    if role in user.roles:
+        await interaction.followup.send(f"⚠️ Account Note: You already own the premium **{item['name']}** role designation!", ephemeral=True)
+        return
+
+    try:
+        await user.add_roles(role)
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "❌ Hierarchy Permission Exception! This role is positioned higher than the bot's current maximum management group tier.", 
+            ephemeral=True
+        )
+        return
+
+    # Success: Deduct balance and commit updates
+    update_balance(user.id, -item["price"])
+    new_bal = get_balance(user.id)
+    
+    embed = discord.Embed(title="🛍️ Premium Shop Purchase Successful!", color=discord.Color.green())
+    embed.description = f"Congratulations {user.mention}! You have successfully purchased and unlocked the **{item['name']}** role!"
+    embed.add_field(name="Amount Charged", value=f"-${item['price']:,}", inline=True)
+    embed.add_field(name="Remaining Funds Wallet", value=f"${new_bal:,}", inline=True)
+    embed.set_footer(text="Vanity badge profile upgrade complete ✨")
+    
+    await interaction.followup.send(embed=embed, ephemeral=False)
 
 
 @client.tree.command(name="give_money", description="Developer Administrative Command: Grant custom virtual funds to a specific user")
