@@ -59,12 +59,12 @@ def increment_stats(user_id, stat_type):
 
 # ===================== CASINO SHOP CONFIGURATION =====================
 SHOP_ITEMS = {
-    "item_1": {"name": "Gambler 🎲", "price": 5000, "color": discord.Color.blue(), "desc": "Starter casino tier."},
-    "item_2": {"name": "High Roller 💰", "price": 25000, "color": discord.Color.green(), "desc": "For big wagerers."},
-    "item_3": {"name": "Casino VIP ✨", "price": 100000, "color": discord.Color.gold(), "desc": "Exclusive lounge access."},
-    "item_4": {"name": "Card Shark 🦈", "price": 250000, "color": discord.Color.teal(), "desc": "Blackjack specialist."},
-    "item_5": {"name": "Millionaire 👑", "price": 1000000, "color": discord.Color.purple(), "desc": "Server elite milestone."},
-    "item_6": {"name": "The Casino Boss 🏰", "price": 5000000, "color": discord.Color.dark_red(), "desc": "Ultimate luxury badge."}
+    "item_1": {"name": "Gambler 🎲", "price": 5000, "color": discord.Color.blue(), "desc": "Starter casino badge for active players."},
+    "item_2": {"name": "High Roller 💰", "price": 25000, "color": discord.Color.green(), "desc": "Premium badge for deep-pocket wagerers."},
+    "item_3": {"name": "Casino VIP ✨", "price": 100000, "color": discord.Color.gold(), "desc": "Elite entitlement for exclusive lounge access."},
+    "item_4": {"name": "Card Shark 🦈", "price": 250000, "color": discord.Color.teal(), "desc": "Master title for blackjack table veterans."},
+    "item_5": {"name": "Millionaire 👑", "price": 1000000, "color": discord.Color.purple(), "desc": "Prestigious tier for server economic elites."},
+    "item_6": {"name": "The Casino Boss 🏰", "price": 5000000, "color": discord.Color.dark_red(), "desc": "The ultimate luxury crown of system ownership."}
 }
 
 class ShopDropdown(discord.ui.Select):
