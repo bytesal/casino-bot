@@ -9,8 +9,8 @@ import threading
 from pymongo import MongoClient
 from datetime import datetime, timedelta
 
-# ===================== MongoDB =====================
-MONGO_URI = "mongodb+srv://salehnakkar_db_user:QqUIaSkMryHShmbY@cluster0.j8uynar.mongodb.net/?appName=Cluster0"
+# ===================== MongoDB (Secured via Environment Variables) =====================
+MONGO_URI = os.getenv("MONGO_URI")
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client["blackjack_db"]
 balances_col = db["user_balances"]
@@ -514,7 +514,7 @@ HORSES = [
     {"name": "Falcon 🦅", "odds": 3.0},
     {"name": "Phantom 😈", "odds": 4.0},
     {"name": "Clover 🍀", "odds": 5.0},
- ]
+]
 
 class HorseRacingView(discord.ui.View):
     def __init__(self, player_id, bet):
@@ -598,28 +598,24 @@ class BlackjackBot(commands.Bot):
 
     async def setup_hook(self):
         print("Setup hook executed.")
-        self.update_live_stats.start() # Fire background loop ticker
+        self.update_live_stats.start()
 
     async def on_error(self, event_method, *args, **kwargs):
         import traceback
         print(f"[Bot Error in {event_method}]")
         traceback.print_exc()
 
-    # Dynamic Background Task Loop - Live Economy Tracker
     @tasks.loop(seconds=60)
     async def update_live_stats(self):
         if not self.is_ready():
             return
         try:
-            # Aggregate all active virtual wealth across MongoDB
             pipeline = [{"$group": {"_id": None, "total": {"$sum": "$balance"}}}]
             result = list(balances_col.aggregate(pipeline))
             total_circulation = result[0]["total"] if result else 0
 
-            # Count total accounts holding current unpaid active debts
             active_loans = balances_col.count_documents({"loan_owed": {"$gt": 0}})
 
-            # Alternating Status Presence Engine
             if self.current_status_index == 0:
                 activity_text = f"${total_circulation:,} in circulation 💰"
                 self.current_status_index = 1
