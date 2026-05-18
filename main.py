@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 import random
 import os
 import asyncio
@@ -103,7 +103,6 @@ class ShopDropdown(discord.ui.Select):
         user = interaction.user
         guild = interaction.guild
         
-        # Anti-exploit check for active debt restriction
         user_data = get_user_data(user.id)
         debt_role = discord.utils.get(guild.roles, name="Debtor 🔴")
         if user_data.get("loan_owed", 0) > 0 or (debt_role and debt_role in user.roles):
@@ -515,7 +514,7 @@ HORSES = [
     {"name": "Falcon 🦅", "odds": 3.0},
     {"name": "Phantom 😈", "odds": 4.0},
     {"name": "Clover 🍀", "odds": 5.0},
-]
+ ]
 
 class HorseRacingView(discord.ui.View):
     def __init__(self, player_id, bet):
@@ -588,21 +587,57 @@ async def horse_racing(interaction: discord.Interaction, bet: int):
     await interaction.response.send_message(embed=embed, view=view)
 
 
-# ===================== BOT SETUP =====================
+# ===================== BOT SETUP & LOOPS =====================
 class BlackjackBot(commands.Bot):
     def __init__(self):
         bot_intents = discord.Intents.default()
         bot_intents.message_content = True
         bot_intents.members = True
         super().__init__(command_prefix="!", intents=bot_intents)
+        self.current_status_index = 0
 
     async def setup_hook(self):
         print("Setup hook executed.")
+        self.update_live_stats.start() # Fire background loop ticker
 
     async def on_error(self, event_method, *args, **kwargs):
         import traceback
         print(f"[Bot Error in {event_method}]")
         traceback.print_exc()
+
+    # Dynamic Background Task Loop - Live Economy Tracker
+    @tasks.loop(seconds=60)
+    async def update_live_stats(self):
+        if not self.is_ready():
+            return
+        try:
+            # Aggregate all active virtual wealth across MongoDB
+            pipeline = [{"$group": {"_id": None, "total": {"$sum": "$balance"}}}]
+            result = list(balances_col.aggregate(pipeline))
+            total_circulation = result[0]["total"] if result else 0
+
+            # Count total accounts holding current unpaid active debts
+            active_loans = balances_col.count_documents({"loan_owed": {"$gt": 0}})
+
+            # Alternating Status Presence Engine
+            if self.current_status_index == 0:
+                activity_text = f"${total_circulation:,} in circulation 💰"
+                self.current_status_index = 1
+            else:
+                activity_text = f"{active_loans} Active Vault Loans 🏦"
+                self.current_status_index = 0
+
+            custom_activity = discord.Activity(
+                type=discord.ActivityType.watching, 
+                name=activity_text
+            )
+            await self.change_presence(activity=custom_activity)
+        except Exception as e:
+            print(f"[Live Stats Loop Error] {e}")
+
+    @update_live_stats.before_loop
+    async def before_update_live_stats(self):
+        await self.wait_until_ready()
 
 
 client = BlackjackBot()
@@ -612,17 +647,10 @@ client = BlackjackBot()
 async def on_ready():
     print(f"Logged in as {client.user.name}!")
     try:
-        custom_activity = discord.Activity(
-            type=discord.ActivityType.playing, 
-            name="/help | Managing Casino"
-        )
-        await client.change_presence(activity=custom_activity)
-        print("Bot activity status configured successfully.")
-        
         synced = await client.tree.sync()
         print(f"Synced {len(synced)} command(s) successfully.")
     except Exception as e:
-        print(f"Failed to sync or set presence: {e}")
+        print(f"Failed to sync global trees: {e}")
 
 
 @client.tree.error
@@ -667,7 +695,7 @@ async def help_command(interaction: discord.Interaction):
         inline=False
     )
     embed.add_field(
-        name="💰 Server Economy & Debt System",
+        name="💰 Server Economy & Shop",
         value=(
             "`/balance` - Check your wallet data.\n"
             "`/daily` - Collect your 24-hour bonus salary reward.\n"
@@ -809,6 +837,34 @@ async def shop_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view)
 
 
+@client.tree.command(name="manage_money", description="Developer Administrative Command: Adjust or deduct user virtual balance")
+@app_commands.describe(action="Financial action to take", user="Target member account", amount="The exact non-negative money size")
+@app_commands.choices(action=[
+    app_commands.Choice(name="Add Balance ➕", value="add"),
+    app_commands.Choice(name="Deduct Balance ➖", value="deduct")
+])
+async def manage_money(interaction: discord.Interaction, action: str, user: discord.User, amount: int):
+    if interaction.user.id != interaction.client.application.owner.id and interaction.user.id != 339082987114627072:
+        await interaction.response.send_message("❌ Access Denied! This command is strictly reserved for the Bot Creator.", ephemeral=True)
+        return
+    
+    if amount < 0:
+        await interaction.response.send_message("❌ Error: Value must be a positive number.", ephemeral=True)
+        return
+
+    actual_amount = amount if action == "add" else -amount
+    update_balance(user.id, actual_amount)
+    new_bal = get_balance(user.id)
+    
+    embed = discord.Embed(title="⚙️ Executive Administrative Action", color=discord.Color.purple())
+    embed.add_field(name="Action Executed", value="Balance Added ➕" if action == "add" else "Balance Deducted ➖", inline=True)
+    embed.add_field(name="Target User Account", value=user.mention, inline=True)
+    embed.add_field(name="Value Size Change", value=f"${amount:,}", inline=False)
+    embed.add_field(name="New Resulting Balance", value=f"**${new_bal:,}**", inline=False)
+    embed.set_footer(text="Action authorized by Core Bot Developer")
+    await interaction.response.send_message(embed=embed)
+
+
 @client.tree.command(name="borrow", description="Request a financial vault loan backed by your current server role credentials")
 @app_commands.describe(amount="The size of the virtual funds cash you wish to borrow")
 async def borrow_command(interaction: discord.Interaction, amount: int):
@@ -836,7 +892,6 @@ async def borrow_command(interaction: discord.Interaction, amount: int):
         )
         return
 
-    # Process and apply debtor role tag
     debt_role = discord.utils.get(guild.roles, name="Debtor 🔴")
     if not debt_role:
         try:
@@ -890,7 +945,6 @@ async def pay_loan_command(interaction: discord.Interaction):
         )
         return
 
-    # Clear financial variables and revoke debtor role
     update_balance(user.id, -owed)
     balances_col.update_one({"user_id": user.id}, {"$set": {"loan_owed": 0}})
     
@@ -909,34 +963,6 @@ async def pay_loan_command(interaction: discord.Interaction):
     embed.set_footer(text="Your account profiles limitations have been fully removed.")
     
     await interaction.followup.send(embed=embed, ephemeral=False)
-
-
-@client.tree.command(name="manage_money", description="Developer Administrative Command: Adjust or deduct user virtual balance")
-@app_commands.describe(action="Financial action to take", user="Target member account", amount="The exact non-negative money size")
-@app_commands.choices(action=[
-    app_commands.Choice(name="Add Balance ➕", value="add"),
-    app_commands.Choice(name="Deduct Balance ➖", value="deduct")
-])
-async def manage_money(interaction: discord.Interaction, action: str, user: discord.User, amount: int):
-    if interaction.user.id != interaction.client.application.owner.id and interaction.user.id != 339082987114627072:
-        await interaction.response.send_message("❌ Access Denied! This command is strictly reserved for the Bot Creator.", ephemeral=True)
-        return
-    
-    if amount < 0:
-        await interaction.response.send_message("❌ Error: Value must be a positive number.", ephemeral=True)
-        return
-
-    actual_amount = amount if action == "add" else -amount
-    update_balance(user.id, actual_amount)
-    new_bal = get_balance(user.id)
-    
-    embed = discord.Embed(title="⚙️ Executive Administrative Action", color=discord.Color.purple())
-    embed.add_field(name="Action Executed", value="Balance Added ➕" if action == "add" else "Balance Deducted ➖", inline=True)
-    embed.add_field(name="Target User Account", value=user.mention, inline=True)
-    embed.add_field(name="Value Size Change", value=f"${amount:,}", inline=False)
-    embed.add_field(name="New Resulting Balance", value=f"**${new_bal:,}**", inline=False)
-    embed.set_footer(text="Action authorized by Core Bot Developer")
-    await interaction.response.send_message(embed=embed)
 
 
 @client.tree.command(name="blackjack", description="Join the official high-stakes casino table to play Blackjack")
