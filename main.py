@@ -82,20 +82,13 @@ LOAN_LIMITS = [
 DEFAULT_LOAN_LIMIT = 2000
 DEFAULT_INTEREST = 0.15
 
-def get_user_loan_tier(member):
-    user_roles = [role.name for role in member.roles]
-    for tier in LOAN_LIMITS:
-        if tier["role"] in user_roles:
-            return tier["max_loan"], tier["interest"], tier["role"]
-    return DEFAULT_LOAN_LIMIT, DEFAULT_INTEREST, "Default Player"
-
-# SECURED DIRECT ACCESSIBLE IMAGE ASSETS
-IMG_COIN_FLIP = "https://cdn.pixabay.com/photo/2016/11/29/13/21/astronomy-1869792_1280.jpg"
-IMG_SLOTS = "https://cdn.pixabay.com/photo/2017/01/03/01/07/reels-1948281_1280.jpg"
-IMG_ROULETTE = "https://cdn.pixabay.com/photo/2016/09/06/13/46/casino-1649104_1280.jpg"
-IMG_HORSE_RACING = "https://cdn.pixabay.com/photo/2015/11/07/11/48/racecourse-1031388_1280.jpg"
-IMG_HEADS_RESULT = "https://cdn.pixabay.com/photo/2017/02/02/10/38/coin-2032338_1280.png"
-IMG_TAILS_RESULT = "https://cdn.pixabay.com/photo/2017/02/02/10/38/gold-2032337_1280.png"
+# HIGHLY STABLE DIRECT VERIFIED OPEN ASSETS
+IMG_COIN_FLIP = "https://media.giphy.com/media/l3vR16pONsV8cKkWk/giphy.gif"
+IMG_SLOTS = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM2ZicGdyZmw5N3Z2b3Fldmd5bWx2ZHdhaWJmNHYycmlwNXYzd29oNyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/VdbyGEvY4Qe64/giphy.gif"
+IMG_ROULETTE = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3drOHFyeGthdXRmaHV4OWxzd3NxdWlyajcyM3oxNDNidTVuNm1mciZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/26uf8rcYmRtoUo8Y8/giphy.gif"
+IMG_HORSE_RACING = "https://media.giphy.com/media/13Zt9nscX96I6s/giphy.gif"
+IMG_HEADS_RESULT = "https://media.discordapp.net/attachments/1113228965949685810/1145112111557058601/heads.png"
+IMG_TAILS_RESULT = "https://media.discordapp.net/attachments/1113228965949685810/1145112111959711774/tails.png"
 
 # ===================== SLOTS GENERATION LOGIC =====================
 SLOT_SYMBOLS = ["🍒", "🍋", "🍊", "🍇", "⭐", "💎", "7️⃣"]
@@ -504,6 +497,14 @@ class RouletteView(discord.ui.View):
 
 
 # ===================== HORSE RACING INTERACTIVE 🐎 =====================
+HORSES = [
+    {"name": "Lightning ⚡", "odds": 2.0},
+    {"name": "Blizzard 💨", "odds": 2.5},
+    {"name": "Falcon 🦅", "odds": 3.0},
+    {"name": "Phantom 😈", "odds": 4.0},
+    {"name": "Clover 🍀", "odds": 5.0},
+]
+
 class HorseRacingView(discord.ui.View):
     def __init__(self, player_id, bet):
         super().__init__(timeout=45)
